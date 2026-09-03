@@ -1,0 +1,629 @@
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Controls
+import Quickshell
+import Quickshell.Hyprland
+import Quickshell.Io
+import qs.Commons
+import qs.Ui
+
+// Bar icon plus its drop-down: pick which windows follow you across workspaces,
+// and where each one goes. Rules are written to a small state file that
+// Service.qml watches and turns into live Hyprland behaviour.
+Panel {
+    id: root
+    moduleName: "io.github.jondkinney.omapin"
+    ipcTarget: "io.github.jondkinney.omapin"
+
+    readonly property color foreground: bar ? bar.foreground : Color.foreground
+    readonly property color dim: Qt.darker(foreground, 1.55)
+    readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+    // Hex form of the foreground, for the <font color> in the StyledText legend.
+    readonly property string fgHex: {
+        var c = root.foreground
+        function h(x) { var v = Math.round(x * 255).toString(16); return v.length < 2 ? "0" + v : v }
+        return "#" + h(c.r) + h(c.g) + h(c.b)
+    }
+
+    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/omapin.json"
+
+    // The bar sizes each widget slot from its item's implicit size
+    // (Bar.qml: activeItem.implicitWidth), and Panel is a bare Item whose
+    // implicit size stays 0 -- without this binding the icon renders into a
+    // zero-width slot and never appears. Verified the hard way: hot plugin
+    // reloads can keep serving the previously compiled component, so removing
+    // this looked harmless until the next full shell restart made it not be.
+    implicitWidth: button.implicitWidth
+    implicitHeight: button.implicitHeight
+
+    property var rules: []
+    property var windows: []
+    property var monitorNames: []
+
+    // Window titles and classes are set by the applications themselves, so they
+    // are never trusted here: rendered as plain text, length-capped, and with
+    // control, C1 and bidi characters replaced, since those can reorder what is
+    // on screen and make one window's row read as another's.
+    function displayText(value, limit) {
+        var s = typeof value === "string" ? value : ""
+        if (s.length > limit)
+            s = s.slice(0, limit)
+        var out = ""
+        for (var i = 0; i < s.length; i++) {
+            var c = s.charCodeAt(i)
+            var unsafe = c < 32 || c === 127 || (c >= 128 && c <= 159)
+                || (c >= 8234 && c <= 8238) || (c >= 8294 && c <= 8297)
+            out += unsafe ? "?" : s.charAt(i)
+        }
+        return out
+    }
+
+    // --------------------------------------------------------------- rules io
+
+    function parseRules(raw) {
+        if (typeof raw !== "string" || raw.length === 0 || raw.length > 262144)
+            return []
+        var parsed
+        try {
+            parsed = JSON.parse(raw)
+        } catch (e) {
+            return []
+        }
+        if (!parsed || !Array.isArray(parsed.rules))
+            return []
+
+        var out = []
+        for (var i = 0; i < parsed.rules.length && out.length < 64; i++) {
+            var r = parsed.rules[i]
+            if (!r || typeof r !== "object" || typeof r["class"] !== "string")
+                continue
+            out.push({
+                "class": r["class"].slice(0, 256),
+                title: typeof r.title === "string" ? r.title.slice(0, 256) : "",
+                monitor: typeof r.monitor === "string" ? r.monitor.slice(0, 64) : "",
+                placement: typeof r.placement === "string" ? r.placement.slice(0, 32) : "fill",
+                label: typeof r.label === "string" ? r.label.slice(0, 128) : "",
+                stay: r.stay === true,
+                tile: r.tile === true
+            })
+        }
+        return out
+    }
+
+    FileView {
+        id: rulesFile
+        path: root.statePath
+        watchChanges: true
+        atomicWrites: true
+        printErrors: false
+        onLoaded: root.rules = root.parseRules(text())
+        onFileChanged: reload()
+        onLoadFailed: root.rules = []
+    }
+
+    Process {
+        id: ensureDirProc
+        command: ["mkdir", "-p", Quickshell.env("HOME") + "/.local/state/omarchy"]
+    }
+
+    function save() {
+        ensureDirProc.running = true
+        rulesFile.setText(JSON.stringify({ version: 1, rules: root.rules }, null, 2) + "\n")
+    }
+
+    // ------------------------------------------------------------- derivation
+
+    function luaPatternEscape(value) {
+        return String(value).replace(/[\^\$\(\)%\.\[\]\*\+\-\?]/g, function (m) { return "%" + m })
+    }
+
+    // Turn the window you picked into a rule that still matches the next one
+    // like it. Chrome names an --app window after its URL, and the path segment
+    // changes per meeting or document -- a Meet call is
+    // "chrome-meet.google.com__<code>-Default" -- so those anchor on the host
+    // and let the rest vary. Everything else pins to class and title, which is
+    // what separates a Zoom call window ("Meeting") from the Workplace window,
+    // its toolbars and its chat panels, all of which share the class "Zoom".
+    function deriveRule(win) {
+        var cls = String(win["class"] || "")
+        var title = String(win.title || "")
+        var app = cls.match(/^chrome-([^_]+)__(.*)$/)
+        if (app) {
+            var host = "^chrome%-" + luaPatternEscape(app[1]) + "__"
+            // A bare site is "<host>__-Default"; anything else carries a path,
+            // which is what tells a call apart from the landing page.
+            return {
+                "class": app[2].charAt(0) === "-" ? host : host + "[^%-]",
+                title: "",
+                label: app[1]
+            }
+        }
+        return {
+            "class": "^" + luaPatternEscape(cls) + "$",
+            title: title.length ? "^" + luaPatternEscape(title) + "$" : "",
+            label: title.length ? cls + " - " + title : cls
+        }
+    }
+
+    function addRule(win) {
+        var derived = deriveRule(win)
+        for (var i = 0; i < root.rules.length; i++) {
+            if (root.rules[i]["class"] === derived["class"]
+                    && root.rules[i].title === derived.title)
+                return
+        }
+        // Default to filling the last display listed when there is a spare one
+        // -- the case this exists for -- and a corner otherwise.
+        var hasSpare = root.monitorNames.length > 1
+        root.rules = root.rules.concat([{
+            "class": derived["class"],
+            title: derived.title,
+            monitor: hasSpare ? root.monitorNames[root.monitorNames.length - 1] : "",
+            placement: hasSpare ? "fill" : "bottom-right",
+            label: derived.label,
+            // Stay on by default -- a window that quietly snapped back the moment
+            // you returned to its workspace surprised more than it helped.
+            stay: true,
+            tile: false
+        }])
+        save()
+    }
+
+    function setFields(index, patch) {
+        if (index < 0 || index >= root.rules.length)
+            return
+        var next = []
+        for (var i = 0; i < root.rules.length; i++) {
+            var r = root.rules[i]
+            var copy = { "class": r["class"], title: r.title, monitor: r.monitor,
+                         placement: r.placement, label: r.label,
+                         stay: r.stay === true, tile: r.tile === true }
+            if (i === index)
+                for (var k in patch)
+                    copy[k] = patch[k]
+            next.push(copy)
+        }
+        root.rules = next
+        save()
+    }
+
+    function setField(index, key, value) {
+        var patch = {}
+        patch[key] = value
+        setFields(index, patch)
+    }
+
+    function removeRule(index) {
+        var next = []
+        for (var i = 0; i < root.rules.length; i++) {
+            if (i !== index)
+                next.push(root.rules[i])
+        }
+        root.rules = next
+        save()
+    }
+
+    function ruleFor(win) {
+        var derived = deriveRule(win)
+        for (var i = 0; i < root.rules.length; i++) {
+            if (root.rules[i]["class"] === derived["class"] && root.rules[i].title === derived.title)
+                return i
+        }
+        return -1
+    }
+
+    // ----------------------------------------------------------- live sources
+
+    function refreshWindows() {
+        Hyprland.refreshToplevels()
+        var model = Hyprland.toplevels
+        var list = model && model.values ? model.values : []
+        var out = []
+        for (var i = 0; i < list.length && out.length < 100; i++) {
+            var ipc = list[i] ? list[i].lastIpcObject : null
+            if (!ipc || typeof ipc["class"] !== "string" || !ipc["class"].length)
+                continue
+            out.push({
+                "class": ipc["class"].slice(0, 200),
+                title: typeof ipc.title === "string" ? ipc.title.slice(0, 200) : "",
+                workspace: ipc.workspace && ipc.workspace.name ? String(ipc.workspace.name).slice(0, 40) : ""
+            })
+        }
+        out.sort(function (a, b) {
+            var byClass = a["class"].localeCompare(b["class"])
+            return byClass !== 0 ? byClass : a.title.localeCompare(b.title)
+        })
+        root.windows = out
+    }
+
+    Process {
+        id: monitorsProc
+        command: ["hyprctl", "monitors", "-j"]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                var names = []
+                try {
+                    var arr = JSON.parse(text)
+                    if (Array.isArray(arr)) {
+                        for (var i = 0; i < arr.length && names.length < 16; i++) {
+                            var n = arr[i] ? arr[i].name : null
+                            if (typeof n === "string" && /^[A-Za-z0-9._:-]{1,64}$/.test(n))
+                                names.push(n)
+                        }
+                    }
+                } catch (e) {
+                    // Leave the list as it was; the dropdown still offers "Same display".
+                }
+                root.monitorNames = names
+            }
+        }
+    }
+
+    readonly property var monitorOptions: {
+        var opts = [{ value: "", label: "Same display" }]
+        for (var i = 0; i < monitorNames.length; i++)
+            opts.push({ value: monitorNames[i], label: monitorNames[i] })
+        return opts
+    }
+
+    readonly property var availableWindows: {
+        var out = []
+        for (var i = 0; i < windows.length; i++)
+            if (ruleFor(windows[i]) < 0)
+                out.push(windows[i])
+        return out
+    }
+
+    readonly property var placementOptions: [
+        { value: "fill", label: "Fill it" },
+        { value: "bottom-right", label: "Bottom right" },
+        { value: "bottom-left", label: "Bottom left" },
+        { value: "top-right", label: "Top right" },
+        { value: "top-left", label: "Top left" },
+        { value: "tiled", label: "Tiled" }
+    ]
+
+    onOpenedChanged: {
+        if (opened) {
+            refreshWindows()
+            refreshSettle.restart()
+            monitorsProc.running = true
+        }
+    }
+
+    // refreshToplevels() is an asynchronous round trip, so the snapshot taken
+    // above can miss a window opened moments before. One late pass covers it.
+    Timer {
+        id: refreshSettle
+        interval: 400
+        onTriggered: if (root.opened) root.refreshWindows()
+    }
+
+    Component.onCompleted: {
+        rulesFile.reload()
+        monitorsProc.running = true
+    }
+
+    // --------------------------------------------------------------------- ui
+
+    BarIconButton {
+        id: button
+        anchors.fill: parent
+        bar: root.bar
+        // The button's own text slot renders in the bar's icon font; a
+        // hand-rolled Text has no way to know about that and just draws tofu.
+        text: ""
+        foreground: root.rules.length > 0 ? root.barForeground : Qt.darker(root.barForeground, 1.55)
+        tooltipText: (root.rules.length === 0
+            ? "No windows set to follow you"
+            : root.rules.length + (root.rules.length === 1 ? " window follows you" : " windows follow you"))
+            + "\nClick to choose"
+        onPressed: root.toggle()
+    }
+
+    KeyboardPanel {
+        id: panel
+        anchorItem: button
+        owner: root
+        bar: root.bar
+        open: root.opened
+        contentWidth: panel.fittedContentWidth(Style.space(420))
+        // Up to 80% of the screen tall before it needs to scroll; the old fixed
+        // cap cut the list off on tall monitors that had room to spare.
+        contentHeight: panel.fittedContentHeight(content.implicitHeight, Math.round(panel.screenH * 0.8))
+
+        // One viewport for the whole panel body. The card caps its height at
+        // whatever fits the screen, and anything past that must scroll --
+        // otherwise the column keeps painting straight through the border
+        // (which it did, twice, before this).
+        Flickable {
+            id: scroller
+            anchors.fill: parent
+            contentWidth: width
+            contentHeight: content.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: contentHeight > height
+
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+            ColumnLayout {
+                id: content
+                width: scroller.width
+                spacing: Style.space(6)
+
+                PanelSectionHeader {
+                    Layout.fillWidth: true
+                    text: "Follow me across workspaces"
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                    // Larger than the default caption size -- this is the panel's title.
+                    fontSize: Style.font.heading
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: "Switch away from one of these windows' workspaces and it moves to the display and spot you pick, staying in view while you work elsewhere."
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    wrapMode: Text.WordWrap
+                }
+
+                // Toggle key -- a small definition list, explained once here so the
+                // per-rule rows can stay compact. The toggle name is drawn in the
+                // foreground colour, its meaning dimmed.
+                GridLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Style.space(2)
+                    columns: 2
+                    columnSpacing: Style.space(10)
+                    rowSpacing: Style.space(4)
+
+                    Text {
+                        Layout.alignment: Qt.AlignTop
+                        text: "Stay pinned"
+                        textFormat: Text.PlainText
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Keep pinned, even on the originating workspace. If set to off - the pin snaps back into tiling on the originating workspace."
+                        textFormat: Text.PlainText
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                    }
+
+                }
+
+                PanelSeparator {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Style.space(4)
+                }
+
+                Text {
+                    visible: root.rules.length === 0
+                    Layout.fillWidth: true
+                    Layout.topMargin: Style.space(2)
+                    text: "Nothing set yet -- pick a window from the list below to add one."
+                    textFormat: Text.PlainText
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    wrapMode: Text.WordWrap
+                }
+
+                Repeater {
+                    model: root.rules
+
+                    delegate: ColumnLayout {
+                        required property var modelData
+                        required property int index
+                        Layout.fillWidth: true
+                        Layout.topMargin: Style.space(8)
+                        spacing: Style.space(5)
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(8)
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.displayText(modelData.label || modelData["class"], 120)
+                                textFormat: Text.PlainText
+                                color: root.foreground
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.body
+                                elide: Text.ElideRight
+                            }
+
+                            Button {
+                                text: "Remove"
+                                fontFamily: root.fontFamily
+                                foreground: root.foreground
+                                onClicked: root.removeRule(index)
+                            }
+                        }
+
+                        // Editable match patterns (Lua patterns). Class is required;
+                        // an empty title matches any title.
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: Style.space(8)
+                            rowSpacing: Style.space(4)
+
+                            Text {
+                                Layout.alignment: Qt.AlignVCenter
+                                text: "Class"
+                                textFormat: Text.PlainText
+                                color: root.dim
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                            }
+                            TextField {
+                                Layout.fillWidth: true
+                                text: modelData["class"]
+                                placeholderText: "Lua pattern, e.g. ^Zoom$"
+                                foreground: root.foreground
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                                onEditingFinished: {
+                                    if (text !== modelData["class"])
+                                        root.setField(index, "class", text)
+                                }
+                            }
+
+                            Text {
+                                Layout.alignment: Qt.AlignVCenter
+                                text: "Title"
+                                textFormat: Text.PlainText
+                                color: root.dim
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                            }
+                            TextField {
+                                Layout.fillWidth: true
+                                text: modelData.title
+                                placeholderText: "any title"
+                                foreground: root.foreground
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                                onEditingFinished: {
+                                    if (text !== modelData.title)
+                                        root.setField(index, "title", text)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(8)
+
+                            Dropdown {
+                                Layout.fillWidth: true
+                                label: "Display"
+                                options: root.monitorOptions
+                                value: modelData.monitor
+                                foreground: root.foreground
+                                fontFamily: root.fontFamily
+                                onChanged: function (v) { root.setField(index, "monitor", v) }
+                            }
+
+                            Dropdown {
+                                Layout.fillWidth: true
+                                label: "Placement"
+                                options: root.placementOptions
+                                // Tiled is stored as a separate flag so the corner
+                                // survives underneath: pick a corner again and the
+                                // window goes back to floating exactly there.
+                                value: modelData.tile === true ? "tiled" : modelData.placement
+                                foreground: root.foreground
+                                fontFamily: root.fontFamily
+                                onChanged: function (v) {
+                                    if (v === "tiled")
+                                        root.setFields(index, { tile: true })
+                                    else
+                                        root.setFields(index, { tile: false, placement: v })
+                                }
+
+                                property bool hoverNow: false
+                                onHovered: function (on) { hoverNow = on }
+
+                                PanelToolTip {
+                                    visible: parent.hoverNow && !parent.popupOpen
+                                    delay: 350
+                                    text: "Tiled: still follows you across workspaces -- it joins each workspace's layout wherever the layout puts it, instead of floating over a corner."
+                                    fontFamily: root.fontFamily
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Style.space(8)
+
+                            Item { Layout.fillWidth: true }
+
+                            Text {
+                                text: "Stay pinned"
+                                textFormat: Text.PlainText
+                                color: root.foreground
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.body
+                            }
+
+                            ToggleSwitch {
+                                checked: modelData.stay === true
+                                foreground: root.foreground
+                                onToggled: root.setField(index, "stay", !(modelData.stay === true))
+                            }
+                        }
+
+                        PanelSeparator {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Style.space(8)
+                        }
+                    }
+                }
+
+                PanelSectionHeader {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Style.space(8)
+                    text: "Open windows"
+                    fontFamily: root.fontFamily
+                    foreground: root.foreground
+                }
+
+                Repeater {
+                    model: root.availableWindows
+
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.topMargin: Style.space(5)
+                        spacing: Style.space(8)
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 0
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.displayText(modelData.title || modelData["class"], 120)
+                                textFormat: Text.PlainText
+                                color: root.foreground
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.body
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: root.displayText(modelData["class"], 90)
+                                    + (modelData.workspace ? "   workspace " + root.displayText(modelData.workspace, 40) : "")
+                                textFormat: Text.PlainText
+                                color: root.dim
+                                font.family: root.fontFamily
+                                font.pixelSize: Style.font.bodySmall
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Button {
+                            text: "Add"
+                            fontFamily: root.fontFamily
+                            foreground: root.foreground
+                            onClicked: root.addRule(modelData)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

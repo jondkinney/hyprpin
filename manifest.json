@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.jondkinney.omapin",
+  "name": "Omapin",
+  "version": "1.5.1",
+  "author": "Jon Kinney",
+  "license": "MIT",
+  "description": "Keeps chosen windows visible when you switch away from their workspace: moved onto a display of their own, or parked in a corner. Compositor-level picture-in-picture for video calls.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "OmapinPanel.qml"
+  },
+  "service": {
+    "displayName": "Omapin",
+    "description": "Watches for the workspace behind a chosen window going off screen, and floats, places and pins the window so it stays visible. Wayland gives an app no way to place or pin its own window, so this has to come from the compositor.",
+    "defaults": {},
+    "schema": []
+  },
+  "barWidget": {
+    "displayName": "Omapin",
+    "description": "Pick which windows follow you across workspaces, and where they go.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "cornerWidthPercent": 22,
+      "cornerMinWidth": 420,
+      "margin": 20,
+      "fallbackPlacement": "bottom-right"
+    },
+    "schema": [
+      {
+        "key": "cornerWidthPercent",
+        "type": "integer",
+        "label": "Corner size (% of display width)",
+        "defaultValue": 22,
+        "description": "How wide a corner pop-out is, as a percentage of the logical width of the display it lands on. Height follows at 16:9."
+      },
+      {
+        "key": "cornerMinWidth",
+        "type": "integer",
+        "label": "Smallest corner width (px)",
+        "defaultValue": 420,
+        "description": "Floor for the above, so a corner pop-out stays usable on a small display."
+      },
+      {
+        "key": "margin",
+        "type": "integer",
+        "label": "Corner margin (px)",
+        "defaultValue": 20,
+        "description": "Gap between a corner pop-out and the edges of the display. Filling a display ignores this and goes edge to edge."
+      },
+      {
+        "key": "fallbackPlacement",
+        "type": "enum",
+        "label": "Fallback corner",
+        "defaultValue": "bottom-right",
+        "options": [
+          "bottom-right",
+          "bottom-left",
+          "top-right",
+          "top-left"
+        ],
+        "description": "Where a window goes when the display its rule names is not connected -- another machine profile, or simply unplugged."
+      }
+    ]
+  }
+}
