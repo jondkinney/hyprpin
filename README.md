@@ -11,6 +11,29 @@ itself to every workspace. Switch back to its home workspace and it goes back
 exactly as it was -- same workspace, same size, same position, same tiled or
 floating state.
 
+## Install
+
+```bash
+omarchy plugin add https://github.com/jondkinney/omapin
+omarchy bar move io.github.jondkinney.omapin --section right
+omarchy restart shell
+```
+
+The restart matters: the service half only starts on a full shell restart,
+and `rescanPlugins` alone will not bring it up.
+
+## Remove
+
+```bash
+omarchy plugin remove io.github.jondkinney.omapin
+omarchy restart shell
+```
+
+The plugin never touches your Hyprland config; the engine lives in Hyprland's
+Lua state and disappears with it. Rules and remembered sizes are kept in
+`~/.local/state/omarchy/omapin.json` and `~/.local/state/omarchy/omapin-sizes.lua`
+-- delete those two files to forget everything.
+
 ## How it works
 
 Hyprland's `pin` does more than mark a window: pinning one that lives on a
