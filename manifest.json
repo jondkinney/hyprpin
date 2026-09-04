@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.jondkinney.hyprpin",
   "name": "Hyprpin",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "author": "Jon Kinney",
   "license": "MIT",
-  "description": "Keeps chosen windows visible when you switch away from their workspace: moved onto a display of their own, or parked in a corner. Compositor-level picture-in-picture for video calls.",
+  "description": "Keeps chosen windows visible when you switch away from their workspace: moved onto a display of their own, parked in a corner, or tucked into the scratchpad. Compositor-level picture-in-picture for video calls.",
   "kinds": [
     "service",
     "bar-widget"

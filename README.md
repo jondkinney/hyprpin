@@ -1,8 +1,9 @@
 # Hyprpin
 
 Keeps chosen windows visible when you switch away from their workspace: moved
-onto a display of their own, or parked in a corner. Compositor-level
-picture-in-picture, for the calls a browser will only do this for inside a tab.
+onto a display of their own, parked in a corner, or tucked into the scratchpad
+a keypress away. Compositor-level picture-in-picture, for the calls a browser
+will only do this for inside a tab.
 
 Click the bar icon, pick a window from **Open windows**, then choose a display
 and a placement for it. From then on, whenever the workspace behind that window
@@ -81,7 +82,13 @@ on the next change or restart.
   may be `""` to match on class alone. Widen or narrow a rule by hand -- e.g.
   relax `^Blip$` to `^Blip` so `Blip (2)` still matches.
 - `monitor` -- output name, or `""` for whichever display the window is on.
-- `placement` -- `fill`, `bottom-right`, `bottom-left`, `top-right`, `top-left`.
+- `placement` -- `fill`, `bottom-right`, `bottom-left`, `top-right`, `top-left`,
+  or `special`. In the panel `special` is the "Scratchpad" choice: instead of
+  showing the window anywhere, the engine parks it in Hyprland's
+  `special:scratchpad` workspace, the one Omarchy's SUPER+S and SUPER+grave
+  toggle, so it is a keypress away on whichever display you are looking at.
+  `monitor` is ignored for it. Pull it out of the scratchpad by hand
+  (SUPER+ALT+S) and the engine lets go of it, as with a manual unpin.
 - `stay` -- `true` (the default for new rules) keeps it popped even when you
   return to its home workspace; it only comes back when you unpin it yourself.
   Set `false` to have it snap back to where it was when you return.
@@ -101,7 +108,8 @@ Wired in `~/.config/hypr/local.lua`:
   with a rule goes to that rule's display and corner (remembered size if you
   have resized it before); anything else gets the stock 65%x95% centered pop.
 - **SUPER+Z** -- zoom a pop-out to half the display wide, 80% tall, centered;
-  again puts it back. Does nothing on a window that is not a pop-out.
+  again puts it back. Does nothing on a window that is not a pop-out, or on
+  one parked in the scratchpad.
 - **SUPER+T** -- on a pop-out, dock it into the current workspace (it tiles in,
   and that workspace becomes its home); leaving re-floats it to the configured
   corner, returning re-tiles it. Press again to undock back to a floating pop.

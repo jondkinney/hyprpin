@@ -402,7 +402,8 @@ Panel {
         { value: "bottom-left", label: "Bottom left" },
         { value: "top-right", label: "Top right" },
         { value: "top-left", label: "Top left" },
-        { value: "tiled", label: "Tiled" }
+        { value: "tiled", label: "Tiled" },
+        { value: "special", label: "Scratchpad" }
     ]
 
     onOpenedChanged: {
@@ -571,6 +572,23 @@ Panel {
                         wrapMode: Text.WordWrap
                     }
 
+                    Text {
+                        Layout.alignment: Qt.AlignTop
+                        text: "Scratchpad"
+                        textFormat: Text.PlainText
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "A placement that hides the window in the scratchpad instead of showing it. SUPER+S summons it on any display."
+                        textFormat: Text.PlainText
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                    }
                 }
 
                 PanelSeparator {
@@ -681,6 +699,11 @@ Panel {
                                 Layout.fillWidth: true
                                 label: "Display"
                                 options: root.monitorOptions
+                                // A special workspace follows whichever monitor you
+                                // toggle it on, so the display is moot for Scratchpad.
+                                readonly property bool moot: modelData.placement === "special" && modelData.tile !== true
+                                enabled: !moot
+                                opacity: moot ? 0.4 : 1
                                 value: modelData.monitor
                                 foreground: root.foreground
                                 fontFamily: root.fontFamily
@@ -710,7 +733,7 @@ Panel {
                                 PanelToolTip {
                                     visible: parent.hoverNow && !parent.popupOpen
                                     delay: 350
-                                    text: "Tiled: still follows you across workspaces -- it joins each workspace's layout wherever the layout puts it, instead of floating over a corner."
+                                    text: "Tiled: still follows you across workspaces -- it joins each workspace's layout wherever the layout puts it, instead of floating over a corner.\nScratchpad: hides it in the scratchpad instead; SUPER+S brings it up."
                                     fontFamily: root.fontFamily
                                 }
                             }
