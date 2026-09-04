@@ -55,6 +55,12 @@ Panel {
     property var windows: []
     property var monitorNames: []
 
+    // The global switch. Off stops the service matching anything and hands
+    // every pop-out back; the rules stay exactly as they are, so on is a
+    // resume, not a rebuild. Lives in the state file next to the rules so a
+    // hand edit and the service see the same thing. Missing key reads as on.
+    property bool enabled: true
+
     // Window titles and classes are set by the applications themselves, so they
     // are never trusted here: rendered as plain text, length-capped, and with
     // control, C1 and bidi characters replaced, since those can reorder what is
@@ -75,17 +81,21 @@ Panel {
 
     // --------------------------------------------------------------- rules io
 
-    function parseRules(raw) {
+    function parseState(raw) {
+        var none = { enabled: true, rules: [] }
         if (typeof raw !== "string" || raw.length === 0 || raw.length > 262144)
-            return []
+            return none
         var parsed
         try {
             parsed = JSON.parse(raw)
         } catch (e) {
-            return []
+            return none
         }
-        if (!parsed || !Array.isArray(parsed.rules))
-            return []
+        if (!parsed || typeof parsed !== "object")
+            return none
+        var enabled = parsed.enabled !== false
+        if (!Array.isArray(parsed.rules))
+            return { enabled: enabled, rules: [] }
 
         var out = []
         for (var i = 0; i < parsed.rules.length && out.length < 64; i++) {
@@ -102,7 +112,7 @@ Panel {
                 tile: r.tile === true
             })
         }
-        return out
+        return { enabled: enabled, rules: out }
     }
 
     // Pointed at the state directory, the FileView never loads content (a
@@ -145,12 +155,13 @@ Panel {
         function settle() {
             if (code < 0 || !streamDone)
                 return
-            if (code === 0)
-                root.rules = root.parseRules(payload)
-            else if (code === 3)
-                root.rules = []
-            else
+            if (code === 0 || code === 3) {
+                var state = code === 0 ? root.parseState(payload) : { enabled: true, rules: [] }
+                root.enabled = state.enabled
+                root.rules = state.rules
+            } else {
                 console.warn("hyprpin: rules read refused (exit " + code + ")")
+            }
             payload = ""
             if (rerun) { rerun = false; start() }
         }
@@ -191,7 +202,7 @@ Panel {
     }
 
     function save() {
-        var body = JSON.stringify({ version: 1, rules: root.rules }, null, 2) + "\n"
+        var body = JSON.stringify({ version: 1, enabled: root.enabled, rules: root.rules }, null, 2) + "\n"
         // A save while the previous one is in flight queues behind it; only
         // the newest queued body matters, since each save carries all rules.
         if (writeProc.running) {
@@ -200,6 +211,14 @@ Panel {
         }
         writeProc.pending = body
         writeProc.running = true
+    }
+
+    // Flipped optimistically so the icon and the switch answer at once; the
+    // file write that follows is what the service actually acts on, and the
+    // re-read after it lands settles the value either way.
+    function setEnabled(on) {
+        root.enabled = on === true
+        save()
     }
 
     // ------------------------------------------------------------- derivation
@@ -416,12 +435,25 @@ Panel {
         // The button's own text slot renders in the bar's icon font; a
         // hand-rolled Text has no way to know about that and just draws tofu.
         text: ""
-        foreground: root.rules.length > 0 ? root.barForeground : Qt.darker(root.barForeground, 1.55)
-        tooltipText: (root.rules.length === 0
-            ? "No windows set to follow you"
-            : root.rules.length + (root.rules.length === 1 ? " window follows you" : " windows follow you"))
-            + "\nClick to choose"
-        onPressed: root.toggle()
+        // Two dim states, kept distinct: the icon goes dark when there is
+        // nothing to follow you, and translucent as well when the plugin is
+        // switched off -- so an off plugin with rules still reads as "off",
+        // not as "empty".
+        foreground: root.enabled && root.rules.length > 0
+            ? root.barForeground : Qt.darker(root.barForeground, 1.55)
+        dimmed: !root.enabled
+        tooltipText: (!root.enabled
+            ? "Hyprpin is off"
+            : root.rules.length === 0
+                ? "No windows set to follow you"
+                : root.rules.length + (root.rules.length === 1 ? " window follows you" : " windows follow you"))
+            + "\nClick to choose, right-click to turn " + (root.enabled ? "off" : "on")
+        // Right-click is the power user's switch: flips the whole plugin
+        // without opening anything, the way the audio widget mutes.
+        onPressed: function (b) {
+            if (b === Qt.RightButton) root.setEnabled(!root.enabled)
+            else root.toggle()
+        }
     }
 
     KeyboardPanel {
@@ -455,13 +487,50 @@ Panel {
                 width: scroller.width
                 spacing: Style.space(6)
 
-                PanelSectionHeader {
+                // Title row: the panel's name, and the global on/off switch on
+                // its trailing edge -- the obvious place to find out the whole
+                // thing can be switched off (right-clicking the bar icon does
+                // the same without opening the panel).
+                RowLayout {
                     Layout.fillWidth: true
-                    text: "Follow me across workspaces"
-                    fontFamily: root.fontFamily
-                    foreground: root.foreground
-                    // Larger than the default caption size -- this is the panel's title.
-                    fontSize: Style.font.heading
+                    spacing: Style.space(8)
+
+                    PanelSectionHeader {
+                        Layout.fillWidth: true
+                        text: "Follow me across workspaces"
+                        fontFamily: root.fontFamily
+                        foreground: root.foreground
+                        // Larger than the default caption size -- this is the panel's title.
+                        fontSize: Style.font.heading
+                    }
+
+                    ToggleSwitch {
+                        id: powerSwitch
+                        checked: root.enabled
+                        foreground: root.foreground
+                        Layout.alignment: Qt.AlignVCenter
+                        onToggled: root.setEnabled(!root.enabled)
+
+                        PanelToolTip {
+                            visible: powerSwitch.containsMouse
+                            delay: 350
+                            text: root.enabled
+                                ? "Turn off: every pop-out goes back where it came from and nothing follows you until you turn it on again. Rules are kept."
+                                : "Turn on: windows with a rule follow you again."
+                            fontFamily: root.fontFamily
+                        }
+                    }
+                }
+
+                Text {
+                    visible: !root.enabled
+                    Layout.fillWidth: true
+                    text: "Off -- nothing follows you right now. Your rules are kept; switch back on to resume."
+                    textFormat: Text.PlainText
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    wrapMode: Text.WordWrap
                 }
 
                 Text {

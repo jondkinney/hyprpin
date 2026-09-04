@@ -11,6 +11,17 @@ itself to every workspace. Switch back to its home workspace and it goes back
 exactly as it was -- same workspace, same size, same position, same tiled or
 floating state.
 
+## Switching it off
+
+The bar icon's drop-down has an on/off switch on its title row. Off hands
+every pop-out back where it came from and stops anything following you; your
+rules are kept, and on resumes them. The icon dims while it is off.
+
+**Right-click the bar icon** to flip the same switch without opening anything.
+
+While off, **SUPER+O** and **SUPER+T** fall through to their stock behaviour
+(the centered 65%x95% pop, and the plain float/tile toggle).
+
 ## Install
 
 ```bash
@@ -58,12 +69,14 @@ on the next change or restart.
 ```json
 {
   "version": 1,
+  "enabled": true,
   "rules": [
     { "class": "^Zoom$", "title": "^Meeting$", "monitor": "DVI-I-1", "placement": "fill" }
   ]
 }
 ```
 
+- `enabled` -- the global switch (see above). Missing means on.
 - `class`, `title` -- Lua patterns, editable per rule in the panel. `title`
   may be `""` to match on class alone. Widen or narrow a rule by hand -- e.g.
   relax `^Blip$` to `^Blip` so `Blip (2)` still matches.

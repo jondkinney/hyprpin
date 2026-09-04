@@ -96,21 +96,32 @@ Item {
 
     property var rules: []
 
+    // The global switch, kept in the same state file as the rules. Off means
+    // the engine stops matching entirely and hands every pop-out back; the
+    // rules themselves are untouched, so turning it back on resumes as before.
+    // A file without the key (every file written before the switch existed)
+    // reads as on.
+    property bool enabled: true
+
     // Everything here comes off disk and is editable by hand, so it is treated
     // as untrusted: shapes are checked, strings are bounded, and the monitor
     // name and placement are whitelisted rather than sanitised.
-    function parseRules(raw) {
+    function parseState(raw) {
+        var none = { enabled: true, rules: [] }
         if (typeof raw !== "string" || raw.length === 0 || raw.length > 262144)
-            return []
+            return none
         var parsed
         try {
             parsed = JSON.parse(raw)
         } catch (e) {
             console.warn("hyprpin: rules file is not valid JSON, ignoring it")
-            return []
+            return none
         }
-        if (!parsed || !Array.isArray(parsed.rules))
-            return []
+        if (!parsed || typeof parsed !== "object")
+            return none
+        var enabled = parsed.enabled !== false
+        if (!Array.isArray(parsed.rules))
+            return { enabled: enabled, rules: [] }
 
         var out = []
         for (var i = 0; i < parsed.rules.length && out.length < 64; i++) {
@@ -132,7 +143,7 @@ Item {
                 stay: r.stay === true, tile: r.tile === true
             })
         }
-        return out
+        return { enabled: enabled, rules: out }
     }
 
     // Remembered pop-out sizes, as validated data. Injected into the engine
@@ -224,13 +235,15 @@ Item {
         function finishRead() {
             if (code < 0 || !streamDone)
                 return
-            var next = code === 0 ? root.parseRules(payload) : []
+            var next = code === 0 ? root.parseState(payload) : { enabled: true, rules: [] }
+            var current = { enabled: root.enabled, rules: root.rules }
             if (code !== 0 && code !== 3) {
                 console.warn("hyprpin: rules read refused (exit " + code + "), keeping current rules")
-            } else if (root.rulesReadOnce && JSON.stringify(next) === JSON.stringify(root.rules)) {
+            } else if (root.rulesReadOnce && JSON.stringify(next) === JSON.stringify(current)) {
                 // Unchanged; the watcher fired for some other file in the dir.
             } else {
-                root.rules = next
+                root.enabled = next.enabled
+                root.rules = next.rules
                 root.rulesReadOnce = true
                 root.applySoon()
             }
@@ -370,6 +383,11 @@ Item {
 'S.rules = {',
 rulesLua(),
 '}',
+'-- The global switch. Off short-circuits everything the engine would do on',
+'-- its own -- no matching, no pops, no carries -- and the keybinds fall',
+'-- through to their stock behaviour. The rules stay loaded so nothing is',
+'-- lost; the sweep at the end of this chunk hands existing pop-outs back.',
+'S.enabled = ' + (enabled ? "true" : "false"),
 'S.width_fraction = ' + (cornerWidthPercent / 100),
 'S.min_width = ' + cornerMinWidth,
 'S.margin = ' + margin,
@@ -662,6 +680,20 @@ sizesLua(),
 '  S.saved[window.address] = nil',
 'end',
 '',
+'-- Let go of a tracked window entirely: put it back where it came from and',
+'-- forget it. A docked window that is tiled at home has no saved float',
+'-- geometry to snap back to, so releasing it just untracks and unfloats.',
+'local function release(window, sv)',
+'  if sv.dock then',
+'    local selector = "address:" .. window.address',
+'    hl.dispatch(hl.dsp.window.pin({ window = selector, action = "off" }))',
+'    if window.floating then hl.dispatch(hl.dsp.window.float({ window = selector, action = "off" })) end',
+'    S.saved[window.address] = nil',
+'  else',
+'    restore(window, sv)',
+'  end',
+'end',
+'',
 '-- SUPER+T on a tracked pop-out (wired in ~/.config/hypr/local.lua): zoom it',
 '-- to half the display wide, 80% tall, centered -- and back where it was.',
 'function S.toggle_big(address)',
@@ -740,19 +772,12 @@ sizesLua(),
 '-- back. Returns false when the window has no rule and is not already a pop, so',
 '-- the keybind can fall back to the stock float-and-pin.',
 'function S.toggle_pop(address)',
+'  if not S.enabled then return false end',
 '  local window = hl.get_window("address:" .. address)',
 '  if not window then return false end',
 '  local sv = S.saved[address]',
 '  if sv then',
-'    if sv.dock then',
-'      -- A docked window that is currently tiled at home has no saved float',
-'      -- geometry to snap back to, so releasing it just untracks and unfloats.',
-'      hl.dispatch(hl.dsp.window.pin({ window = "address:" .. address, action = "off" }))',
-'      if window.floating then hl.dispatch(hl.dsp.window.float({ window = "address:" .. address, action = "off" })) end',
-'      S.saved[address] = nil',
-'    else',
-'      restore(window, sv)',
-'    end',
+'    release(window, sv)',
 '    return true',
 '  end',
 '  local rule = eligible(window)',
@@ -765,6 +790,7 @@ sizesLua(),
 '-- a floating pop. Returns false when the window is not a tracked pop, so the',
 '-- keybind falls through to the stock float toggle for ordinary windows.',
 'function S.toggle_dock(address)',
+'  if not S.enabled then return false end',
 '  local window = hl.get_window("address:" .. address)',
 '  local sv = window and S.saved[address]',
 '  if not sv then return false end',
@@ -780,6 +806,7 @@ sizesLua(),
 'end',
 '',
 'local function evaluate()',
+'  if not S.enabled then return end',
 '  local seen = {}',
 '',
 '  for _, window in ipairs(hl.get_windows()) do',
@@ -879,20 +906,30 @@ sizesLua(),
 'hl.timer(sample, { timeout = 1500, type = "oneshot" })',
 '',
 '-- A rule removed from the panel takes its pop-out with it, now rather than',
-'-- on some later workspace switch. Matching is by rule identity, not by',
-'-- re-running eligible(): a window whose title drifted out of pattern match',
-'-- mid-call must not be yanked home, and a hand-popped window has no',
-'-- rule_key and is never a candidate.',
+'-- on some later workspace switch, and switching the whole plugin off takes',
+'-- every pop-out with it. Matching is by rule identity, not by re-running',
+'-- eligible(): a window whose title drifted out of pattern match mid-call',
+'-- must not be yanked home, and a hand-popped window has no rule_key and is',
+'-- never a candidate.',
 'do',
 '  local live = {}',
 '  for _, r in ipairs(S.rules) do live[rule_key(r)] = true end',
 '  for address, sv in pairs(S.saved) do',
-'    if sv.rule_key and not live[sv.rule_key] then',
+'    if not S.enabled or (sv.rule_key and not live[sv.rule_key]) then',
 '      local w = hl.get_window("address:" .. address)',
-'      if w then restore(w, sv) else S.saved[address] = nil end',
+'      if w then release(w, sv) else S.saved[address] = nil end',
 '    end',
 '  end',
 'end',
+'',
+'-- Switching back on evaluates now rather than on the next workspace switch,',
+'-- so a call whose workspace is already hidden pops straight back out. Only',
+'-- on the off->on edge: an ordinary re-apply (settings, a rules save) keeps',
+'-- its hands off the layout.',
+'if S.enabled and S.was_enabled == false then',
+'  hl.timer(evaluate, { timeout = 60, type = "oneshot" })',
+'end',
+'S.was_enabled = S.enabled',
 '',
 'S.sub = hl.on("workspace.active", function()',
 '  -- The monitor\'s active_workspace is not settled while the event fires, and',
