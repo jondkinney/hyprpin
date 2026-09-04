@@ -25,7 +25,22 @@ Panel {
         return "#" + h(c.r) + h(c.g) + h(c.b)
     }
 
-    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/hyprpin.json"
+    readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy"
+    readonly property string statePath: stateDir + "/hyprpin.json"
+
+    // Reads and writes of the replaceable state file go through statefile.py:
+    // a bounded O_NOFOLLOW descriptor read, and an exclusive-staging atomic
+    // write. The shell never materializes the file itself.
+    readonly property string helperPath: {
+        var url = Qt.resolvedUrl("statefile.py").toString()
+        return url.indexOf("file://") === 0 ? url.slice(7) : url
+    }
+
+    readonly property var hyprctlEnv: ({
+        HYPRLAND_INSTANCE_SIGNATURE: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") || "",
+        XDG_RUNTIME_DIR: Quickshell.env("XDG_RUNTIME_DIR") || "",
+        HOME: Quickshell.env("HOME") || ""
+    })
 
     // The bar sizes each widget slot from its item's implicit size
     // (Bar.qml: activeItem.implicitWidth), and Panel is a bare Item whose
@@ -90,25 +105,101 @@ Panel {
         return out
     }
 
+    // Pointed at the state directory, the FileView never loads content (a
+    // directory load fails by design); only its change watcher is used. All
+    // writers publish by atomic rename, which is a directory-entry change.
     FileView {
-        id: rulesFile
-        path: root.statePath
+        path: root.stateDir
         watchChanges: true
-        atomicWrites: true
         printErrors: false
-        onLoaded: root.rules = root.parseRules(text())
-        onFileChanged: reload()
-        onLoadFailed: root.rules = []
+        onFileChanged: rereadSettle.restart()
+    }
+
+    Timer {
+        id: rereadSettle
+        interval: 250
+        onTriggered: rulesReadProc.start()
     }
 
     Process {
-        id: ensureDirProc
-        command: ["mkdir", "-p", Quickshell.env("HOME") + "/.local/state/omarchy"]
+        id: rulesReadProc
+        command: ["/usr/bin/python3", "-I", root.helperPath, "read", root.statePath, "262144"]
+        clearEnvironment: true
+        property int code: -1
+        property bool streamDone: false
+        property string payload: ""
+        property bool rerun: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                rulesReadProc.payload = String(text)
+                rulesReadProc.streamDone = true
+                rulesReadProc.settle()
+            }
+        }
+        onExited: function (exitCode) { code = exitCode; settle() }
+        function start() {
+            if (running) { rerun = true; return }
+            code = -1; streamDone = false; payload = ""
+            running = true
+        }
+        function settle() {
+            if (code < 0 || !streamDone)
+                return
+            if (code === 0)
+                root.rules = root.parseRules(payload)
+            else if (code === 3)
+                root.rules = []
+            else
+                console.warn("hyprpin: rules read refused (exit " + code + ")")
+            payload = ""
+            if (rerun) { rerun = false; start() }
+        }
+    }
+
+    Process {
+        id: writeProc
+        command: ["/usr/bin/python3", "-I", root.helperPath, "write", root.statePath, "262144"]
+        clearEnvironment: true
+        stdinEnabled: true
+        property string pending: ""
+        onStarted: {
+            writeProc.write(pending)
+            pending = ""
+            stdinEnabled = false
+        }
+        property string queued: ""
+        onExited: function (exitCode) {
+            stdinEnabled = true
+            if (exitCode !== 0)
+                console.warn("hyprpin: rules write failed (exit " + exitCode + ")")
+            if (queued.length) {
+                pending = queued
+                queued = ""
+                running = true
+            }
+        }
+    }
+
+    Timer {
+        interval: 10000
+        repeat: true
+        running: rulesReadProc.running || writeProc.running
+        onTriggered: {
+            if (rulesReadProc.running) rulesReadProc.signal(9)
+            if (writeProc.running) writeProc.signal(9)
+        }
     }
 
     function save() {
-        ensureDirProc.running = true
-        rulesFile.setText(JSON.stringify({ version: 1, rules: root.rules }, null, 2) + "\n")
+        var body = JSON.stringify({ version: 1, rules: root.rules }, null, 2) + "\n"
+        // A save while the previous one is in flight queues behind it; only
+        // the newest queued body matters, since each save carries all rules.
+        if (writeProc.running) {
+            writeProc.queued = body
+            return
+        }
+        writeProc.pending = body
+        writeProc.running = true
     }
 
     // ------------------------------------------------------------- derivation
@@ -238,12 +329,17 @@ Panel {
 
     Process {
         id: monitorsProc
-        command: ["hyprctl", "monitors", "-j"]
+        command: ["/usr/bin/hyprctl", "monitors", "-j"]
+        clearEnvironment: true
+        environment: root.hyprctlEnv
         stdout: StdioCollector {
             onStreamFinished: {
                 var names = []
                 try {
-                    var arr = JSON.parse(text)
+                    var raw = String(text)
+                    if (raw.length > 262144)
+                        throw new Error("oversized reply")
+                    var arr = JSON.parse(raw)
                     if (Array.isArray(arr)) {
                         for (var i = 0; i < arr.length && names.length < 16; i++) {
                             var n = arr[i] ? arr[i].name : null
@@ -257,6 +353,13 @@ Panel {
                 root.monitorNames = names
             }
         }
+    }
+
+    Timer {
+        interval: 10000
+        repeat: true
+        running: monitorsProc.running
+        onTriggered: monitorsProc.signal(9)
     }
 
     readonly property var monitorOptions: {
@@ -300,7 +403,7 @@ Panel {
     }
 
     Component.onCompleted: {
-        rulesFile.reload()
+        rulesReadProc.start()
         monitorsProc.running = true
     }
 

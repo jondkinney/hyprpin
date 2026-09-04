@@ -31,7 +31,7 @@ omarchy restart shell
 
 The plugin never touches your Hyprland config; the engine lives in Hyprland's
 Lua state and disappears with it. Rules and remembered sizes are kept in
-`~/.local/state/omarchy/hyprpin.json` and `~/.local/state/omarchy/hyprpin-sizes.lua`
+`~/.local/state/omarchy/hyprpin.json` and `~/.local/state/omarchy/hyprpin-sizes.json`
 -- delete those two files to forget everything.
 
 ## How it works
@@ -50,7 +50,10 @@ service re-applies whenever Hyprland reports `configreloaded`.
 ## Rules
 
 Rules live in `~/.local/state/omarchy/hyprpin.json` and are safe to hand-edit;
-the widget and the service both reload on change.
+the widget and the service both reload on change. The watcher keys on
+directory entries, so it sees any editor that saves by rename (which is how
+editors save) -- an in-place append from a shell redirect is only picked up
+on the next change or restart.
 
 ```json
 {
@@ -97,9 +100,41 @@ Wired in `~/.config/hypr/local.lua`:
 
 Resize a floating pop-out by hand and the new size sticks: future pops of that
 rule reuse it, anchored in the same corner. Sizes live in
-`~/.local/state/omarchy/hyprpin-sizes.lua`, written by the engine itself --
+`~/.local/state/omarchy/hyprpin-sizes.json`, written by the engine itself --
 delete the file (or one entry) to forget. Tiled pop-outs are not recorded,
 since the layout resizes those whenever their neighbours change.
+
+## Security boundaries
+
+The plugin's external boundaries, and the contract at each:
+
+- **State files** (`hyprpin.json`, `hyprpin-sizes.json`) live in a
+  user-writable directory, so the shell never materializes them itself.
+  `statefile.py` opens each once with `O_NOFOLLOW|O_NONBLOCK`, validates the
+  descriptor with `fstat` (regular file, owned by the invoking user, within
+  the byte limit -- 256 KiB for rules, 32 KiB for sizes), reads only through
+  it, and runs under a 5-second deadline. Writes stage into an exclusively
+  created 0600 file relative to a pinned directory descriptor (verified
+  user-owned and not group/world writable) and publish by atomic rename.
+  QML re-checks length and validates every field, count, and range after
+  parsing. `tests/test-statefile.py` exercises the boundaries: exact limit
+  and one over, symlinks, FIFOs, planted destination links, oversized input.
+- **The engine** is generated Lua pushed into Hyprland with `hyprctl eval`.
+  Everything injected into it passes through an escaping serializer with
+  per-string caps. The engine reads no files: remembered sizes are injected
+  by the service as validated data. It writes `hyprpin-sizes.json` (bounded
+  to 64 entries) by staging-plus-rename; Lua's `io` cannot open exclusively,
+  so staging creation is the one step that is clear-then-create rather than
+  `O_EXCL`, a same-user race documented here rather than hidden.
+- **Child processes** (`/usr/bin/hyprctl`, `/usr/bin/python3 -I`) run with
+  absolute paths, a cleared environment (hyprctl gets only the variables that
+  locate its socket), 10-second kill deadlines, and output that is either
+  producer-bounded or length-checked before parsing.
+- **Change watching** uses a `FileView` pointed at the state directory, whose
+  content load fails by design -- only the directory-entry watcher is used,
+  so no watched path can feed content into the shell.
+- **Window titles and classes** shown in the panel are length-capped,
+  stripped of control/C1/bidi characters, and rendered `Text.PlainText`.
 
 ## Notes
 

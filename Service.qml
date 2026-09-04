@@ -25,10 +25,28 @@ Item {
     property var shell: null
 
     readonly property string pluginId: "io.github.jondkinney.hyprpin"
-    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/hyprpin.json"
-    // Remembered pop-out sizes, written and read by the engine itself so they
-    // survive both shell restarts and Hyprland config reloads.
-    readonly property string sizesPath: Quickshell.env("HOME") + "/.local/state/omarchy/hyprpin-sizes.lua"
+    readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/omarchy"
+    readonly property string statePath: stateDir + "/hyprpin.json"
+    // Remembered pop-out sizes: written by the engine (it is the side that
+    // notices a hand resize), read back only by this service, as data.
+    readonly property string sizesPath: stateDir + "/hyprpin-sizes.json"
+
+    // State files live in a user-writable directory, so nothing here loads one
+    // wholesale into the shell. statefile.py opens a file once with
+    // O_NOFOLLOW|O_NONBLOCK, validates the descriptor (regular, owned by us,
+    // within the byte limit) and reads only through it.
+    readonly property string helperPath: {
+        var url = Qt.resolvedUrl("statefile.py").toString()
+        return url.indexOf("file://") === 0 ? url.slice(7) : url
+    }
+
+    // hyprctl needs only these to find its socket; everything else inherited
+    // from the shell's environment stays out of child processes.
+    readonly property var hyprctlEnv: ({
+        HYPRLAND_INSTANCE_SIGNATURE: Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE") || "",
+        XDG_RUNTIME_DIR: Quickshell.env("XDG_RUNTIME_DIR") || "",
+        HOME: Quickshell.env("HOME") || ""
+    })
 
     // Our shell.json entry holds the tuning knobs. A plugin that declares a bar
     // widget is enabled from bar.layout rather than plugins[], so look in both
@@ -117,24 +135,169 @@ Item {
         return out
     }
 
+    // Remembered pop-out sizes, as validated data. Injected into the engine
+    // chunk; the engine itself never reads a file.
+    property var sizes: []
+
+    function parseSizes(raw) {
+        if (typeof raw !== "string" || raw.length === 0 || raw.length > 32768)
+            return []
+        var parsed
+        try {
+            parsed = JSON.parse(raw)
+        } catch (e) {
+            console.warn("hyprpin: sizes file is not valid JSON, ignoring it")
+            return []
+        }
+        if (!parsed || !Array.isArray(parsed.entries))
+            return []
+        var out = []
+        for (var i = 0; i < parsed.entries.length && out.length < 64; i++) {
+            var e = parsed.entries[i]
+            if (!e || typeof e !== "object")
+                continue
+            var cls = typeof e["class"] === "string" ? e["class"] : ""
+            var title = typeof e.title === "string" ? e.title : ""
+            if (!cls.length || cls.length > 256 || title.length > 256)
+                continue
+            if (typeof e.w !== "number" || typeof e.h !== "number"
+                    || !isFinite(e.w) || !isFinite(e.h))
+                continue
+            var w = Math.floor(e.w)
+            var h = Math.floor(e.h)
+            if (w < 100 || w > 16384 || h < 60 || h > 16384)
+                continue
+            out.push({ "class": cls, title: title, w: w, h: h })
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- file io
+    //
+    // The FileView never loads content -- pointed at the state directory, its
+    // load fails by design and only the change watcher is used. Every writer
+    // of these files publishes by atomic rename, which is a directory-entry
+    // change, so this fires for each of them. Content then comes through the
+    // bounded helper.
+
     FileView {
-        id: rulesFile
-        path: root.statePath
+        path: root.stateDir
         watchChanges: true
         printErrors: false
-        onLoaded: { root.rules = root.parseRules(text()); root.applySoon() }
-        onFileChanged: reload()
-        // First run: no file yet. Still apply, so a config reload does not leave
-        // a previously popped window stranded with no engine to restore it.
-        onLoadFailed: { root.rules = []; root.applySoon() }
+        onFileChanged: root.rereadSoon()
+    }
+
+    // The directory watcher fires for every file in the shared state dir, so
+    // reads are coalesced and results compared before anything re-applies.
+    Timer {
+        id: rereadSettle
+        interval: 250
+        onTriggered: { rulesReadProc.start(); sizesReadProc.start() }
+    }
+
+    function rereadSoon() { rereadSettle.restart() }
+
+    property bool rulesReadOnce: false
+    property bool sizesReadOnce: false
+
+    Process {
+        id: rulesReadProc
+        command: ["/usr/bin/python3", "-I", root.helperPath, "read", root.statePath, "262144"]
+        clearEnvironment: true
+        property int code: -1
+        property bool streamDone: false
+        property string payload: ""
+        property bool rerun: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                rulesReadProc.payload = String(text)
+                rulesReadProc.streamDone = true
+                rulesReadProc.finishRead()
+            }
+        }
+        onExited: function (exitCode) { code = exitCode; finishRead() }
+        function start() {
+            if (running) { rerun = true; return }
+            code = -1; streamDone = false; payload = ""
+            running = true
+        }
+        function finishRead() {
+            if (code < 0 || !streamDone)
+                return
+            var next = code === 0 ? root.parseRules(payload) : []
+            if (code !== 0 && code !== 3) {
+                console.warn("hyprpin: rules read refused (exit " + code + "), keeping current rules")
+            } else if (root.rulesReadOnce && JSON.stringify(next) === JSON.stringify(root.rules)) {
+                // Unchanged; the watcher fired for some other file in the dir.
+            } else {
+                root.rules = next
+                root.rulesReadOnce = true
+                root.applySoon()
+            }
+            payload = ""
+            if (rerun) { rerun = false; start() }
+        }
+    }
+
+    Process {
+        id: sizesReadProc
+        command: ["/usr/bin/python3", "-I", root.helperPath, "read", root.sizesPath, "32768"]
+        clearEnvironment: true
+        property int code: -1
+        property bool streamDone: false
+        property string payload: ""
+        property bool rerun: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                sizesReadProc.payload = String(text)
+                sizesReadProc.streamDone = true
+                sizesReadProc.finishRead()
+            }
+        }
+        onExited: function (exitCode) { code = exitCode; finishRead() }
+        function start() {
+            if (running) { rerun = true; return }
+            code = -1; streamDone = false; payload = ""
+            running = true
+        }
+        function finishRead() {
+            if (code < 0 || !streamDone)
+                return
+            var next = code === 0 ? root.parseSizes(payload) : []
+            if (code !== 0 && code !== 3) {
+                console.warn("hyprpin: sizes read refused (exit " + code + "), keeping current sizes")
+            } else if (root.sizesReadOnce && JSON.stringify(next) === JSON.stringify(root.sizes)) {
+                // Unchanged.
+            } else {
+                root.sizes = next
+                root.sizesReadOnce = true
+                root.applySoon()
+            }
+            payload = ""
+            if (rerun) { rerun = false; start() }
+        }
+    }
+
+    // A stuck helper is killed rather than trusted to finish; the readers are
+    // re-armed by the next directory change.
+    Timer {
+        id: readWatchdog
+        interval: 10000
+        repeat: true
+        running: rulesReadProc.running || sizesReadProc.running
+        onTriggered: {
+            if (rulesReadProc.running) rulesReadProc.signal(9)
+            if (sizesReadProc.running) sizesReadProc.signal(9)
+        }
     }
 
     // ------------------------------------------------------------- Lua output
 
-    function luaString(value) {
+    function luaString(value, maxLen) {
         var s = typeof value === "string" ? value : ""
-        if (s.length > 256)
-            s = s.slice(0, 256)
+        var cap = maxLen === undefined ? 256 : maxLen
+        if (s.length > cap)
+            s = s.slice(0, cap)
         var out = ""
         for (var i = 0; i < s.length; i++) {
             var ch = s.charAt(i)
@@ -172,6 +335,19 @@ Item {
         return parts.join("\n")
     }
 
+    // Sizes are keyed the same way the engine keys them: class .. \031 .. title.
+    // Both halves were already capped at 256 by parseSizes, so the key cap of
+    // 520 only guards the joined form.
+    function sizesLua() {
+        var parts = []
+        for (var i = 0; i < sizes.length; i++) {
+            var s = sizes[i]
+            parts.push("  [" + luaString(s["class"] + "\u001F" + s.title, 520)
+                + "] = { w = " + s.w + ", h = " + s.h + " },")
+        }
+        return parts.join("\n")
+    }
+
     function lua() {
         return [
 // Leading empty line on purpose: hyprctl parses an argument beginning with
@@ -199,40 +375,58 @@ rulesLua(),
 'S.margin = ' + margin,
 'S.aspect = 16 / 9',
 'S.fallback = ' + luaString(fallbackPlacement),
-'S.sizes_path = ' + luaString(sizesPath),
-'',
-'-- Sizes the user gave pop-outs by hand, keyed per rule. The file is a Lua',
-'-- chunk this engine writes itself, so it survives config reloads.',
-'do',
-'  local ok, loaded = pcall(dofile, S.sizes_path)',
-'  if ok and type(loaded) == "table" then',
-'    local clean = {}',
-'    for k, v in pairs(loaded) do',
-'      if type(k) == "string" and type(v) == "table" and tonumber(v.w) and tonumber(v.h) then',
-'        clean[k] = { w = math.floor(tonumber(v.w)), h = math.floor(tonumber(v.h)) }',
-'      end',
-'    end',
-'    S.sizes = clean',
-'  else',
-'    S.sizes = S.sizes or {}',
-'  end',
-'end',
-'',
-'local function persist_sizes()',
-'  local f = io.open(S.sizes_path, "w")',
-'  if not f then return end',
-'  f:write("-- written by hyprpin: pop-out sizes remembered from hand resizes.\\n")',
-'  f:write("-- delete this file (or one entry) to forget.\\n")',
-'  f:write("return {\\n")',
-'  for k, v in pairs(S.sizes) do',
-'    f:write(string.format("  [%q] = { w = %d, h = %d },\\n", k, v.w, v.h))',
-'  end',
-'  f:write("}\\n")',
-'  f:close()',
-'end',
+'S.sizes_path = ' + luaString(sizesPath, 512),
 '',
 'local function rule_key(rule)',
 '  return rule.class .. "\\031" .. (rule.title or "")',
+'end',
+'',
+'-- Sizes the user gave pop-outs by hand, keyed per rule. Injected by the',
+'-- service, which reads the JSON state file through a bounded no-follow',
+'-- descriptor and validates every field; the engine itself never loads a',
+'-- file, so no replaceable path can feed it code or unbounded data.',
+'S.sizes = {',
+sizesLua(),
+'}',
+'',
+'-- Persisting is the mirror image: plain JSON, staged next to the',
+'-- destination and published by rename, so the service never sees a torn',
+'-- file and a link planted at the destination is replaced, not followed.',
+'-- Lua\'s io cannot open exclusively, so the staging name is per-generation',
+'-- and cleared first; entries are capped with live rules kept first.',
+'local function json_escape(s)',
+'  return (s:gsub(\'[\\0-\\31\\\\"]\', function(c)',
+'    return string.format("\\\\u%04x", string.byte(c))',
+'  end))',
+'end',
+'',
+'local function persist_sizes()',
+'  local keys = {}',
+'  local live = {}',
+'  for _, r in ipairs(S.rules) do live[rule_key(r)] = true end',
+'  for k in pairs(S.sizes) do if live[k] then keys[#keys + 1] = k end end',
+'  for k in pairs(S.sizes) do',
+'    if not live[k] and #keys < 64 then keys[#keys + 1] = k end',
+'  end',
+'  local parts = {}',
+'  for i = 1, math.min(#keys, 64) do',
+'    local v = S.sizes[keys[i]]',
+'    local class, title = keys[i]:match("^(.*)\\031(.*)$")',
+'    if class and tonumber(v.w) and tonumber(v.h) then',
+'      parts[#parts + 1] = string.format(',
+'        \'    { "class": "%s", "title": "%s", "w": %d, "h": %d }\',',
+'        json_escape(class), json_escape(title), v.w, v.h)',
+'    end',
+'  end',
+'  local staging = S.sizes_path .. ".gen" .. tostring(S.gen)',
+'  os.remove(staging)',
+'  local f = io.open(staging, "w")',
+'  if not f then return end',
+'  f:write(\'{\\n  "version": 1,\\n  "entries": [\\n\')',
+'  f:write(table.concat(parts, ",\\n"))',
+'  f:write(\'\\n  ]\\n}\\n\')',
+'  f:close()',
+'  os.rename(staging, S.sizes_path)',
 'end',
 '',
 'local function remembered(rule)',
@@ -711,9 +905,14 @@ rulesLua(),
     // ------------------------------------------------------------------ apply
 
     // hyprctl reports a Lua error by printing it and still exiting 0, so the
-    // output is the only signal that the engine failed to install.
+    // output is the only signal that the engine failed to install. hyprctl is
+    // the only producer on this pipe and its reply to eval is a short status,
+    // so the collector is bounded by the producer; the log line is capped
+    // anyway, and the watchdog below kills a wedged run.
     Process {
         id: applyProc
+        clearEnvironment: true
+        environment: root.hyprctlEnv
         stdout: StdioCollector {
             onStreamFinished: {
                 var reply = String(text).trim()
@@ -722,7 +921,16 @@ rulesLua(),
             }
         }
     }
-    Process { id: ensureDirProc; command: ["mkdir", "-p", Quickshell.env("HOME") + "/.local/state/omarchy"] }
+
+    Timer {
+        interval: 10000
+        repeat: true
+        running: applyProc.running
+        onTriggered: {
+            console.warn("hyprpin: hyprctl eval exceeded its deadline, killing it")
+            applyProc.signal(9)
+        }
+    }
 
     function apply() {
         // Setting running on an already-running Process is a no-op and would
@@ -732,7 +940,7 @@ rulesLua(),
             settle.restart()
             return
         }
-        applyProc.command = ["hyprctl", "eval", root.lua()]
+        applyProc.command = ["/usr/bin/hyprctl", "eval", root.lua()]
         applyProc.running = true
     }
 
@@ -760,8 +968,11 @@ rulesLua(),
     onSettingsChanged: applySoon()
 
     Component.onCompleted: {
-        ensureDirProc.running = true
-        rulesFile.reload()
+        // First run: no state files yet. The readers report that distinctly
+        // and still apply, so a config reload does not leave a previously
+        // popped window stranded with no engine to restore it.
+        rulesReadProc.start()
+        sizesReadProc.start()
         applySoon()
     }
 }
