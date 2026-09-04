@@ -102,14 +102,18 @@ Panel {
             var r = parsed.rules[i]
             if (!r || typeof r !== "object" || typeof r["class"] !== "string")
                 continue
+            var placement = typeof r.placement === "string" ? r.placement.slice(0, 32) : "fill"
+            // Older files carried a `tile` flag on top of a corner; that mode
+            // is gone and the right edge is its nearest replacement.
+            if (r.tile === true && placement.indexOf("tile-") !== 0)
+                placement = "tile-right"
             out.push({
                 "class": r["class"].slice(0, 256),
                 title: typeof r.title === "string" ? r.title.slice(0, 256) : "",
                 monitor: typeof r.monitor === "string" ? r.monitor.slice(0, 64) : "",
-                placement: typeof r.placement === "string" ? r.placement.slice(0, 32) : "fill",
+                placement: placement,
                 label: typeof r.label === "string" ? r.label.slice(0, 128) : "",
-                stay: r.stay === true,
-                tile: r.tile === true
+                stay: r.stay === true
             })
         }
         return { enabled: enabled, rules: out }
@@ -221,6 +225,48 @@ Panel {
         save()
     }
 
+    // The shell's Dropdown caps its popup at eight rows and exposes no knob
+    // for it; the placement list has ten, and a list that scrolls hides the
+    // shape of the choice (edges as one lap of the display, corners as
+    // another). The popup is a private child of the control, so it is
+    // located by walking the control's object tree once and its height
+    // rebound to fit every option. If the shell's Dropdown ever changes shape
+    // the lookup fails soft: nothing is touched and the list scrolls as
+    // before, with a note in the log.
+    function findPopup(obj, depth) {
+        if (!obj || depth > 6)
+            return null
+        var list = obj.data
+        if (!list)
+            return null
+        for (var i = 0; i < list.length; i++) {
+            var o = list[i]
+            if (!o)
+                continue
+            // The option popup specifically: a tooltip parked inside the
+            // control is a popup too, so match on the option list it holds.
+            if (typeof o.open === "function" && "opened" in o && o.contentItem
+                    && typeof o.contentItem.selectCurrent === "function")
+                return o
+            var found = findPopup(o, depth + 1)
+            if (found)
+                return found
+        }
+        return null
+    }
+
+    function fitDropdownPopup(dd) {
+        var popup = findPopup(dd, 0)
+        if (!popup) {
+            console.warn("hyprpin: placement dropdown popup not found; it will scroll")
+            return
+        }
+        popup.implicitHeight = Qt.binding(function () {
+            var n = dd.options.length
+            return n * dd.popupRowHeight + Math.max(0, n - 1) * Style.spacing.labelGap + Style.spacing.xxs
+        })
+    }
+
     // ------------------------------------------------------------- derivation
 
     function luaPatternEscape(value) {
@@ -273,8 +319,7 @@ Panel {
             label: derived.label,
             // Stay on by default -- a window that quietly snapped back the moment
             // you returned to its workspace surprised more than it helped.
-            stay: true,
-            tile: false
+            stay: true
         }])
         save()
     }
@@ -287,7 +332,7 @@ Panel {
             var r = root.rules[i]
             var copy = { "class": r["class"], title: r.title, monitor: r.monitor,
                          placement: r.placement, label: r.label,
-                         stay: r.stay === true, tile: r.tile === true }
+                         stay: r.stay === true }
             if (i === index)
                 for (var k in patch)
                     copy[k] = patch[k]
@@ -396,13 +441,18 @@ Panel {
         return out
     }
 
+    // Tiled edges clockwise from the top, then floating corners clockwise
+    // from the top left, so each group reads as a lap around the display.
     readonly property var placementOptions: [
         { value: "fill", label: "Fill it" },
-        { value: "bottom-right", label: "Bottom right" },
-        { value: "bottom-left", label: "Bottom left" },
-        { value: "top-right", label: "Top right" },
-        { value: "top-left", label: "Top left" },
-        { value: "tiled", label: "Tiled" },
+        { value: "tile-top", label: "Tiled top" },
+        { value: "tile-right", label: "Tiled right" },
+        { value: "tile-bottom", label: "Tiled bottom" },
+        { value: "tile-left", label: "Tiled left" },
+        { value: "top-left", label: "Floating top left" },
+        { value: "top-right", label: "Floating top right" },
+        { value: "bottom-right", label: "Floating bottom right" },
+        { value: "bottom-left", label: "Floating bottom left" },
         { value: "special", label: "Scratchpad" }
     ]
 
@@ -574,6 +624,24 @@ Panel {
 
                     Text {
                         Layout.alignment: Qt.AlignTop
+                        text: "Tiled"
+                        textFormat: Text.PlainText
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Placements that reserve one edge of the display for the window. Everything else tiles beside it, on every workspace; resize it and the tiles follow."
+                        textFormat: Text.PlainText
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignTop
                         text: "Scratchpad"
                         textFormat: Text.PlainText
                         color: root.foreground
@@ -701,7 +769,7 @@ Panel {
                                 options: root.monitorOptions
                                 // A special workspace follows whichever monitor you
                                 // toggle it on, so the display is moot for Scratchpad.
-                                readonly property bool moot: modelData.placement === "special" && modelData.tile !== true
+                                readonly property bool moot: modelData.placement === "special"
                                 enabled: !moot
                                 opacity: moot ? 0.4 : 1
                                 value: modelData.monitor
@@ -711,21 +779,15 @@ Panel {
                             }
 
                             Dropdown {
+                                id: placementDropdown
                                 Layout.fillWidth: true
                                 label: "Placement"
                                 options: root.placementOptions
-                                // Tiled is stored as a separate flag so the corner
-                                // survives underneath: pick a corner again and the
-                                // window goes back to floating exactly there.
-                                value: modelData.tile === true ? "tiled" : modelData.placement
+                                value: modelData.placement
                                 foreground: root.foreground
                                 fontFamily: root.fontFamily
-                                onChanged: function (v) {
-                                    if (v === "tiled")
-                                        root.setFields(index, { tile: true })
-                                    else
-                                        root.setFields(index, { tile: false, placement: v })
-                                }
+                                onChanged: function (v) { root.setField(index, "placement", v) }
+                                Component.onCompleted: root.fitDropdownPopup(placementDropdown)
 
                                 property bool hoverNow: false
                                 onHovered: function (on) { hoverNow = on }
@@ -733,7 +795,7 @@ Panel {
                                 PanelToolTip {
                                     visible: parent.hoverNow && !parent.popupOpen
                                     delay: 350
-                                    text: "Tiled: still follows you across workspaces -- it joins each workspace's layout wherever the layout puts it, instead of floating over a corner.\nScratchpad: hides it in the scratchpad instead; SUPER+S brings it up."
+                                    text: "Tiled: reserves that edge of the display for the window, and everything else tiles beside it on every workspace. Resize it and the tiles follow.\nScratchpad: hides it in the scratchpad instead; SUPER+S brings it up."
                                     fontFamily: root.fontFamily
                                 }
                             }

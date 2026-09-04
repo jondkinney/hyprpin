@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.jondkinney.hyprpin",
   "name": "Hyprpin",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Jon Kinney",
   "license": "MIT",
   "description": "Keeps chosen windows visible when you switch away from their workspace: moved onto a display of their own, parked in a corner, or tucked into the scratchpad. Compositor-level picture-in-picture for video calls.",
@@ -22,7 +22,7 @@
   },
   "barWidget": {
     "displayName": "Hyprpin",
-    "description": "Pick which windows follow you across workspaces, and where they go.",
+    "description": "Pick which windows follow you across workspaces, and where they go: a display of their own, a corner, a tiled edge, or the scratchpad.",
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "right",
@@ -30,7 +30,8 @@
       "cornerWidthPercent": 22,
       "cornerMinWidth": 420,
       "margin": 20,
-      "fallbackPlacement": "bottom-right"
+      "fallbackPlacement": "bottom-right",
+      "edgeSizePercent": 34
     },
     "schema": [
       {
@@ -53,6 +54,13 @@
         "label": "Corner margin (px)",
         "defaultValue": 20,
         "description": "Gap between a corner pop-out and the edges of the display. Filling a display ignores this and goes edge to edge."
+      },
+      {
+        "key": "edgeSizePercent",
+        "type": "integer",
+        "label": "Tiled edge size (% of display)",
+        "defaultValue": 34,
+        "description": "How much of the display a tiled-edge pop-out takes to start with: width for a left or right edge, height for top or bottom. Resize the window afterwards and the reserved stripe follows it."
       },
       {
         "key": "fallbackPlacement",

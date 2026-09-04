@@ -83,7 +83,7 @@ on the next change or restart.
   relax `^Blip$` to `^Blip` so `Blip (2)` still matches.
 - `monitor` -- output name, or `""` for whichever display the window is on.
 - `placement` -- `fill`, `bottom-right`, `bottom-left`, `top-right`, `top-left`,
-  or `special`. In the panel `special` is the "Scratchpad" choice: instead of
+  a tiled edge (below), or `special`. In the panel `special` is the "Scratchpad" choice: instead of
   showing the window anywhere, the engine parks it in Hyprland's
   `special:scratchpad` workspace, the one Omarchy's SUPER+S and SUPER+grave
   toggle, so it is a keypress away on whichever display you are looking at.
@@ -92,13 +92,18 @@ on the next change or restart.
 - `stay` -- `true` (the default for new rules) keeps it popped even when you
   return to its home workspace; it only comes back when you unpin it yourself.
   Set `false` to have it snap back to where it was when you return.
-- `tile` -- `true` makes it join the tiling layout instead of floating, and the
-  engine carries it to each workspace as you switch. In the panel this is the
-  "Tiled" choice in the Placement dropdown; the corner is kept underneath, so
-  switching back to a corner floats it exactly there again. Position and size
-  while tiled are the layout's call -- forcing a specific corner meant walking
-  the window with directional moves, which fell onto the neighbouring monitor
-  near a screen edge, so the layout places it.
+- `tile-left`, `tile-right`, `tile-top`, `tile-bottom` -- also `placement`
+  values ("Tiled left" and friends in the panel). The window takes a reserved
+  stripe on that edge of its display and everything else tiles beside it, on
+  every workspace of that display, keeping whatever layout it already uses.
+  The stripe starts at the widget's "Tiled edge size" setting (34% of the
+  display by default), and resizing the window with the normal keys moves the
+  tiles with it. This composes two things Hyprland already does -- a pinned
+  floating window, and a workspace gap rule scoped to that one display -- the
+  same way the Omaperch plugin does, so the window never actually joins the
+  layout and the bar is never squeezed. One tiled edge per display: a second
+  window headed for an already-docked display takes its fallback corner. An
+  older file's `tile: true` flag is read as `tile-right`.
 
 ## Keys
 
@@ -109,10 +114,12 @@ Wired in `~/.config/hypr/local.lua`:
   have resized it before); anything else gets the stock 65%x95% centered pop.
 - **SUPER+Z** -- zoom a pop-out to half the display wide, 80% tall, centered;
   again puts it back. Does nothing on a window that is not a pop-out, or on
-  one parked in the scratchpad.
+  one parked in the scratchpad. A tiled edge keeps its reservation while
+  zoomed.
 - **SUPER+T** -- on a pop-out, dock it into the current workspace (it tiles in,
-  and that workspace becomes its home); leaving re-floats it to the configured
-  corner, returning re-tiles it. Press again to undock back to a floating pop.
+  and that workspace becomes its home); leaving sends it back out to wherever
+  its rule puts it -- corner, tiled edge, or scratchpad -- returning re-tiles
+  it. A tiled edge gives its reserved stripe back while docked this way. Press again to undock back to a floating pop.
   On any ordinary window, SUPER+T is the usual float/tile toggle, untouched. With
   **Stay pinned** on, a dock is only temporary: the window floats out when you
   leave and stays a floating pop when you return (press SUPER+T again to
@@ -122,8 +129,9 @@ Wired in `~/.config/hypr/local.lua`:
 Resize a floating pop-out by hand and the new size sticks: future pops of that
 rule reuse it, anchored in the same corner. Sizes live in
 `~/.local/state/omarchy/hyprpin-sizes.json`, written by the engine itself --
-delete the file (or one entry) to forget. Tiled pop-outs are not recorded,
-since the layout resizes those whenever their neighbours change.
+delete the file (or one entry) to forget. A tiled edge remembers its
+thickness the same way. A pop-out docked into a workspace with SUPER+T is not
+recorded, since the layout resizes it whenever its neighbours change.
 
 ## Security boundaries
 
