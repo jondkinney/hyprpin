@@ -12,8 +12,8 @@ import qs.Ui
 // Service.qml watches and turns into live Hyprland behaviour.
 Panel {
     id: root
-    moduleName: "io.github.jondkinney.omapin"
-    ipcTarget: "io.github.jondkinney.omapin"
+    moduleName: "io.github.jondkinney.hyprpin"
+    ipcTarget: "io.github.jondkinney.hyprpin"
 
     readonly property color foreground: bar ? bar.foreground : Color.foreground
     readonly property color dim: Qt.darker(foreground, 1.55)
@@ -25,7 +25,7 @@ Panel {
         return "#" + h(c.r) + h(c.g) + h(c.b)
     }
 
-    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/omapin.json"
+    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/hyprpin.json"
 
     // The bar sizes each widget slot from its item's implicit size
     // (Bar.qml: activeItem.implicitWidth), and Panel is a bare Item whose

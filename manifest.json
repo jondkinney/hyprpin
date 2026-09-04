@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.jondkinney.omapin",
-  "name": "Omapin",
+  "id": "io.github.jondkinney.hyprpin",
+  "name": "Hyprpin",
   "version": "1.5.1",
   "author": "Jon Kinney",
   "license": "MIT",
@@ -12,16 +12,16 @@
   ],
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "OmapinPanel.qml"
+    "barWidget": "HyprpinPanel.qml"
   },
   "service": {
-    "displayName": "Omapin",
+    "displayName": "Hyprpin",
     "description": "Watches for the workspace behind a chosen window going off screen, and floats, places and pins the window so it stays visible. Wayland gives an app no way to place or pin its own window, so this has to come from the compositor.",
     "defaults": {},
     "schema": []
   },
   "barWidget": {
-    "displayName": "Omapin",
+    "displayName": "Hyprpin",
     "description": "Pick which windows follow you across workspaces, and where they go.",
     "category": "System",
     "allowMultiple": false,

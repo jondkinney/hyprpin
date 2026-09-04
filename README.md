@@ -1,4 +1,4 @@
-# Omapin
+# Hyprpin
 
 Keeps chosen windows visible when you switch away from their workspace: moved
 onto a display of their own, or parked in a corner. Compositor-level
@@ -14,8 +14,8 @@ floating state.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/jondkinney/omapin
-omarchy bar move io.github.jondkinney.omapin --section right
+omarchy plugin add https://github.com/jondkinney/hyprpin
+omarchy bar move io.github.jondkinney.hyprpin --section right
 omarchy restart shell
 ```
 
@@ -25,13 +25,13 @@ and `rescanPlugins` alone will not bring it up.
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.jondkinney.omapin
+omarchy plugin remove io.github.jondkinney.hyprpin
 omarchy restart shell
 ```
 
 The plugin never touches your Hyprland config; the engine lives in Hyprland's
 Lua state and disappears with it. Rules and remembered sizes are kept in
-`~/.local/state/omarchy/omapin.json` and `~/.local/state/omarchy/omapin-sizes.lua`
+`~/.local/state/omarchy/hyprpin.json` and `~/.local/state/omarchy/hyprpin-sizes.lua`
 -- delete those two files to forget everything.
 
 ## How it works
@@ -49,7 +49,7 @@ service re-applies whenever Hyprland reports `configreloaded`.
 
 ## Rules
 
-Rules live in `~/.local/state/omarchy/omapin.json` and are safe to hand-edit;
+Rules live in `~/.local/state/omarchy/hyprpin.json` and are safe to hand-edit;
 the widget and the service both reload on change.
 
 ```json
@@ -97,7 +97,7 @@ Wired in `~/.config/hypr/local.lua`:
 
 Resize a floating pop-out by hand and the new size sticks: future pops of that
 rule reuse it, anchored in the same corner. Sizes live in
-`~/.local/state/omarchy/omapin-sizes.lua`, written by the engine itself --
+`~/.local/state/omarchy/hyprpin-sizes.lua`, written by the engine itself --
 delete the file (or one entry) to forget. Tiled pop-outs are not recorded,
 since the layout resizes those whenever their neighbours change.
 

@@ -24,11 +24,11 @@ Item {
     // Injected by the shell's service loader (see shell.qml ensureService).
     property var shell: null
 
-    readonly property string pluginId: "io.github.jondkinney.omapin"
-    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/omapin.json"
+    readonly property string pluginId: "io.github.jondkinney.hyprpin"
+    readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/hyprpin.json"
     // Remembered pop-out sizes, written and read by the engine itself so they
     // survive both shell restarts and Hyprland config reloads.
-    readonly property string sizesPath: Quickshell.env("HOME") + "/.local/state/omarchy/omapin-sizes.lua"
+    readonly property string sizesPath: Quickshell.env("HOME") + "/.local/state/omarchy/hyprpin-sizes.lua"
 
     // Our shell.json entry holds the tuning knobs. A plugin that declares a bar
     // widget is enabled from bar.layout rather than plugins[], so look in both
@@ -88,7 +88,7 @@ Item {
         try {
             parsed = JSON.parse(raw)
         } catch (e) {
-            console.warn("omapin: rules file is not valid JSON, ignoring it")
+            console.warn("hyprpin: rules file is not valid JSON, ignoring it")
             return []
         }
         if (!parsed || !Array.isArray(parsed.rules))
@@ -178,9 +178,9 @@ Item {
 // "--" as one of its own flags and prints its usage instead of evaluating,
 // so the chunk must not open on a Lua comment.
 '',
-'-- managed by io.github.jondkinney.omapin -- edits here are overwritten',
-'local S = _G.__omapin or {}',
-'_G.__omapin = S',
+'-- managed by io.github.jondkinney.hyprpin -- edits here are overwritten',
+'local S = _G.__hyprpin or {}',
+'_G.__hyprpin = S',
 '',
 '-- Re-applying must never stack a second handler on the event, and the',
 '-- generation counter retires any sampler chain from a previous apply.',
@@ -221,7 +221,7 @@ rulesLua(),
 'local function persist_sizes()',
 '  local f = io.open(S.sizes_path, "w")',
 '  if not f then return end',
-'  f:write("-- written by omapin: pop-out sizes remembered from hand resizes.\\n")',
+'  f:write("-- written by hyprpin: pop-out sizes remembered from hand resizes.\\n")',
 '  f:write("-- delete this file (or one entry) to forget.\\n")',
 '  f:write("return {\\n")',
 '  for k, v in pairs(S.sizes) do',
@@ -702,7 +702,7 @@ rulesLua(),
             onStreamFinished: {
                 var reply = String(text).trim()
                 if (reply.length && reply !== "ok")
-                    console.warn("omapin: hyprctl eval said:", reply.slice(0, 400))
+                    console.warn("hyprpin: hyprctl eval said:", reply.slice(0, 400))
             }
         }
     }
