@@ -1,5 +1,7 @@
 # Hyprpin
 
+![Hyprpin — Your windows. With you. A pinned call stays visible across workspaces, with corner pop-out, tiled edge, dedicated display, and scratchpad placements.](preview.png)
+
 Keeps chosen windows visible when you switch away from their workspace: moved
 onto a display of their own, parked in a corner, or tucked into the scratchpad
 a keypress away. Compositor-level picture-in-picture, for the calls a browser
@@ -11,6 +13,8 @@ stops being the one on screen, the window floats to where you said and pins
 itself to every workspace. Switch back to its home workspace and it goes back
 exactly as it was -- same workspace, same size, same position, same tiled or
 floating state.
+
+[View the settings panel](docs/settings-panel.jpg).
 
 ## Switching it off
 
