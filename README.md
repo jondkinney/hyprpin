@@ -108,6 +108,8 @@ on the next change or restart.
   layout and the bar is never squeezed. One tiled edge per display: a second
   window headed for an already-docked display takes its fallback corner. An
   older file's `tile: true` flag is read as `tile-right`.
+  Closing a pinned edge window immediately releases its reserved stripe and
+  lets the other windows fill the space, without switching workspaces.
 
 ## Keys
 
@@ -136,6 +138,19 @@ rule reuse it, anchored in the same corner. Sizes live in
 delete the file (or one entry) to forget. A tiled edge remembers its
 thickness the same way. A pop-out docked into a workspace with SUPER+T is not
 recorded, since the layout resizes it whenever its neighbours change.
+
+## Development checks
+
+```bash
+omarchy plugin validate .
+qmllint -I /usr/share/omarchy/shell Service.qml HyprpinPanel.qml
+python3 tests/test-statefile.py
+node tests/test-window-close.mjs
+```
+
+The close-handling regression test uses Node.js to generate the actual Lua
+engine from `Service.qml`, then Lua to exercise window-close events and
+subscription lifetimes. Node.js and the Lua CLI are development dependencies.
 
 ## Security boundaries
 
