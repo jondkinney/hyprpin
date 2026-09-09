@@ -544,15 +544,29 @@ Panel {
                 // the same without opening the panel).
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: Style.space(8)
+                    Layout.bottomMargin: Style.spacing.xs
+                    spacing: Style.spacing.xl
 
-                    PanelSectionHeader {
-                        Layout.fillWidth: true
-                        text: "Follow me across workspaces"
+                    OpticalGlyph {
+                        Layout.preferredWidth: Math.round(Style.space(24))
+                        Layout.preferredHeight: Math.round(Style.space(24))
+                        text: ""
                         fontFamily: root.fontFamily
-                        foreground: root.foreground
-                        // Larger than the default caption size -- this is the panel's title.
-                        fontSize: Style.font.heading
+                        fontSize: Math.round(Style.font.heading * 1.25)
+                        color: root.enabled ? Color.accent : root.dim
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: "Hyprpin"
+                        textFormat: Text.PlainText
+                        color: Color.popups.text
+                        font.family: root.fontFamily
+                        font.pixelSize: Math.round(Style.font.heading * 1.25)
+                        font.weight: Font.DemiBold
+                        // Leave room for font overshoot at the clipped viewport's top.
+                        topPadding: Math.ceil(font.pixelSize * 0.15)
+                        elide: Text.ElideRight
                     }
 
                     ToggleSwitch {
