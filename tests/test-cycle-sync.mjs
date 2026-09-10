@@ -18,7 +18,7 @@ function harness() {
   const snapshots = [];
   const context = createContext({
     enabled: true, rules: rules("tile-right"), rulesReadOnce: true, rulesRevision: 1,
-    cycleReply: null, cycleReadback: null, parseState: JSON.parse,
+    cycleReply: null, cycleReadback: null, cycleResync: null, applyReceipt: null, applyFailures: 0, parseState: JSON.parse,
     console: { warn() {} }, settle: { restart() {} },
     applySoon() {}, applyProc: { running: false },
     rulesReadProc: { readSerial: 0, running: false, rerun: false, code: -1, streamDone: false, payload: "" },
@@ -29,6 +29,7 @@ function harness() {
   });
   context.root = context;
   runInContext(`${method(source, "finishCycleWrite", 4)}
+    ${method(source, "finishApply", 4)}
     ${method(source, "apply", 4)}
     with (rulesReadProc) {
       ${method(reader, "start", 8)}
@@ -47,6 +48,57 @@ function harness() {
       proc.finishRead();
     },
   };
+}
+
+// A failed hyprctl reply is ambiguous: keep the receipt until a retry works.
+for (const [exitCode, reply] of [[6, "Couldn't read (6)"], [0, ""], [7, "error: failed"]]) {
+  const { context: c, complete, snapshots } = harness();
+  c.finishCycleWrite(21, 0);
+  complete("tile-bottom");
+  c.applyProc.running = false;
+  c.finishApply(exitCode, reply);
+  assert.equal(c.cycleReply.token, 21);
+  c.apply();
+  assert.deepEqual(snapshots[0].reply, snapshots[1].reply);
+  c.applyProc.running = false;
+  c.finishApply(0, "ok");
+  assert.equal(c.applyReceipt, null);
+  assert.equal(c.applyFailures, 0);
+  console.log(`ok: failed apply (${exitCode}, ${JSON.stringify(reply)}) retries the same receipt`);
+}
+
+{
+  const { context: c, complete, snapshots } = harness();
+  c.finishCycleWrite(30, 0);
+  complete("tile-bottom");
+  // Hyprland processed 30 and requested 31, but the reply for 30 was lost.
+  c.cycleReply = { token: 31, success: true };
+  c.applyProc.running = false;
+  c.finishApply(6, "Couldn't read (6)");
+  assert.equal(c.cycleReply.token, 31);
+  c.apply();
+  assert.equal(snapshots.at(-1).reply.token, 31);
+  console.log("ok: newer queued confirmation supersedes a lost earlier reply");
+}
+
+{
+  const { context: c, complete } = harness();
+  c.finishCycleWrite(40, 0);
+  complete("tile-bottom");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    c.applyProc.running = false;
+    c.finishApply(6, "Couldn't read (6)");
+    if (attempt < 2) c.apply();
+  }
+  assert.equal(c.cycleReply, null);
+  assert.equal(c.applyReceipt, null);
+  assert.equal(c.applyFailures, 0);
+  c.cycleResync = 41;
+  c.apply();
+  c.applyProc.running = false;
+  c.finishApply(6, "Couldn't read (6)");
+  assert.equal(c.cycleResync, 41);
+  console.log("ok: retries are bounded and later resynchronization remains possible");
 }
 
 // A directory-watch read began before the save. Neither it nor an unrelated

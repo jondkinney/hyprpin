@@ -13,7 +13,7 @@ export function generate(overrides = {}) {
     cornerWidthPercent: 22, cornerMinWidth: 420, margin: 20,
     fallbackPlacement: "bottom-right", edgeSizePercent: 34,
     sizesPath: "/unused/hyprpin-test.json",
-    cycleSession: "test", rulesRevision: 0, cycleReply: null, ...overrides,
+    cycleSession: "test", rulesRevision: 0, cycleReply: null, cycleResync: null, ...overrides,
   }, { timeout: 1000 });
 }
 

@@ -206,7 +206,8 @@ parser into a fresh engine. Node.js and the Lua CLI are development dependencies
 Cycle tests cover every starting slot, full rule reapplication between presses,
 queued presses, failed saves, zoom, scratchpad, and adoption after a compositor
 reload. Save-confirmation tests cover pre-save reads, interleaved applies, read
-failures, and focus changes while saving. Placement-writer tests exercise stale requests, concurrent edits,
+failures, lost IPC replies, replayed confirmations, stale-request recovery, and
+focus changes while saving. Placement-writer tests exercise stale requests, concurrent edits,
 malformed data, symlinks, FIFOs, and byte limits.
 
 ## Security boundaries
@@ -233,7 +234,12 @@ The plugin's external boundaries, and the contract at each:
   only the placement change. Other rule fields are preserved. Panel writes
   share the lock. The engine moves the window after the service reloads the
   saved rules through a read started after the write and acknowledges success;
-  a failed save leaves it in place.
+  a failed save leaves it in place. Failed Hyprland replies get at most two
+  retries. Confirmation tokens prevent repeated movement when a command ran
+  but its reply was lost. An outdated session/revision triggers a fresh engine
+  snapshot; the pending token and rule identity then decide whether to resend
+  the request or confirm an already-saved placement. Outdated indexes never
+  authorize a state-file write.
 - **The engine** is generated Lua pushed into Hyprland with `hyprctl eval`.
   Everything injected into it passes through an escaping serializer with
   per-string caps. The engine reads no files: remembered sizes are injected

@@ -12,11 +12,12 @@ const handlerStart = service.indexOf("    function handleCycle(");
 const handlerEnd = service.indexOf("    Process {", handlerStart);
 const handler = service.slice(handlerStart, handlerEnd);
 const event = { session: "test", revision: 1, index: 0, token: 1, previous: "tile-right", next: "tile-bottom" };
-function receive(raw, extra = {}) {
+function receive(raw, extra = {}, whole = false) {
   const context = { raw, cycleSession: "test", rulesRevision: 1, cycleReply: null, cycleReadback: null,
+    cycleResync: null, applyFailures: 0, applySoon() {},
     cycleWriteProc: { running: false }, rules: [{ class: '^Test["\\]$', title: 'A "quoted" call', placement: "tile-right" }], ...extra };
   runInNewContext(`${handler}\nhandleCycle(raw)`, context, { timeout: 1000 });
-  return context.cycleWriteProc;
+  return whole ? context : context.cycleWriteProc;
 }
 assert.deepEqual(JSON.parse(receive(JSON.stringify(event)).payload), {
   class: '^Test["\\]$', title: 'A "quoted" call', previous: "tile-right", next: "tile-bottom",
@@ -28,6 +29,11 @@ for (const raw of [null, [], 9, "{", "null", "[]", '"text"', " ".repeat(1025),
 ]) assert.equal(receive(raw).running, false, `must refuse ${raw}`);
 assert.equal(receive(JSON.stringify(event), { cycleReply: { token: 1, success: true } }).running, false);
 assert.equal(receive(JSON.stringify(event), { cycleReadback: { token: 1, success: true, after: 1 } }).running, false);
+for (const outdated of [{ session: "old" }, { revision: 0 }]) {
+  const result = receive(JSON.stringify({ ...event, ...outdated }), {}, true);
+  assert.equal(result.cycleWriteProc.running, false);
+  assert.equal(result.cycleResync, 1, "outdated requests must refresh instead of silently stalling");
+}
 console.log("ok: compositor event schema, snapshot identity, and stdin serialization checks");
 
 const laps = [
@@ -57,6 +63,13 @@ try {
     rules: [{ class: "^Test$", title: "", monitor: "", placement: "tile-right", stay: true }],
     cycleReply: { token: 1, success: true },
   }));
+  for (const [name, placement] of [["unsaved", "tile-right"], ["saved", "tile-bottom"]]) {
+    writeFileSync(join(directory, `resync-${name}.lua`), generate({
+      sizesPath: join(directory, "sizes.json"), rulesRevision: name === "unsaved" ? 1 : 2,
+      rules: [{ class: "^Test$", title: "", monitor: "", placement, stay: true }],
+      cycleResync: 1,
+    }));
+  }
   const result = spawnSync("lua", [fileURLToPath(new URL("floating.lua", import.meta.url)), initial, "cycle", directory], {
     encoding: "utf8", timeout: 10000,
   });

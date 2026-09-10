@@ -197,8 +197,25 @@ if mode == "cycle" then
   w, sv = pop()
   for _ = 1, 9 do assert(__hyprpin.cycle(w.address)) end
   check("rapid presses queue behind one save", #events == 1 and __hyprpin.cycle_pending.queued == 8)
-  for step = 1, 9 do dofile(arg[3] .. "/1-" .. step .. ".lua") end
+  dofile(arg[3] .. "/1-1.lua")
+  dofile(arg[3] .. "/1-1.lua")
+  check("replayed acknowledgment cannot move twice or consume the next request",
+    #events == 2 and __hyprpin.cycle_pending.token == 2 and __hyprpin.cycle_pending.queued == 7)
+  for step = 2, 9 do dofile(arg[3] .. "/1-" .. step .. ".lua") end
   check("all rapid presses complete in order", #events == 9 and sv.rule_placement == "tile-bottom" and not __hyprpin.cycle_pending)
+  reset("tile-right")
+  w, sv = pop()
+  assert(__hyprpin.cycle(w.address))
+  local before_resync = rect(w)
+  dofile(arg[3] .. "/resync-unsaved.lua")
+  check("outdated request resends after refresh without moving early", #events == 2 and same(w, before_resync))
+  dofile(arg[3] .. "/resync-unsaved.lua")
+  check("replaying a refresh cannot send a duplicate write", #events == 2)
+  dofile(arg[3] .. "/resync-saved.lua")
+  check("already saved request recovers without another file write",
+    not __hyprpin.cycle_pending and #events == 2 and sv.rule_placement == "tile-bottom")
+  dofile(arg[3] .. "/resync-saved.lua")
+  check("replaying recovery cannot advance the lap", sv.cycle_remaining == 2 and #events == 2)
   reset("tile-right")
   w, sv = pop()
   assert(__hyprpin.cycle(w.address))

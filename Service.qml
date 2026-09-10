@@ -238,6 +238,9 @@ Item {
     readonly property string cycleSession: Date.now().toString(36) + Math.random().toString(36).slice(2)
     property var cycleReply: null
     property var cycleReadback: null
+    property var cycleResync: null
+    property var applyReceipt: null
+    property int applyFailures: 0
 
     // A compositor event carries only a bounded rule index and snapshot ID.
     // Rule text travels to the writer on stdin, never through an executable
@@ -247,10 +250,21 @@ Item {
             return
         var request
         try { request = JSON.parse(raw) } catch (e) { return }
-        if (!request || request.session !== cycleSession || request.revision !== rulesRevision
+        if (!request || typeof request.session !== "string" || request.session.length > 64
+                || !Number.isInteger(request.revision) || request.revision < 0
                 || !Number.isInteger(request.token) || request.token < 1 || request.token > 1000000000
-                || !Number.isInteger(request.index) || request.index < 0 || request.index >= rules.length
+                || !Number.isInteger(request.index) || request.index < 0 || request.index >= 64
                 || ["tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left"].indexOf(request.next) < 0)
+            return
+        if (request.session !== cycleSession || request.revision !== rulesRevision) {
+            // Never write from an outdated index. Refresh the engine first;
+            // its pending token and rule identity decide whether to resend.
+            cycleResync = request.token
+            applyFailures = 0
+            applySoon()
+            return
+        }
+        if (request.index >= rules.length)
             return
         var rule = rules[request.index]
         if (rule.placement !== request.previous)
@@ -1188,6 +1202,13 @@ sizesLua(),
 '  end',
 'end',
 '',
+'local function send_cycle(pending, rule, index)',
+'  pending.sent_session, pending.sent_revision = S.cycle_session, S.rules_revision',
+'  local payload = string.format(\'{"session":"%s","revision":%d,"index":%d,"token":%d,"previous":"%s","next":"%s"}\',',
+'    json_escape(S.cycle_session), S.rules_revision, index - 1, pending.token, rule.placement, pending.next)',
+'  hl.dispatch(hl.dsp.event("hyprpin-cycle|" .. payload))',
+'end',
+'',
 'function S.cycle(address)',
 '  if not S.enabled then return false end',
 '  local window = hl.get_window("address:" .. address)',
@@ -1222,10 +1243,8 @@ sizesLua(),
 '  S.cycle_seq = (S.cycle_seq or 0) % 1000000000 + 1',
 '  local token = S.cycle_seq',
 '  S.cycle_pending = { token = token, address = address, sv = sv, adopt = adopt,',
-'    key = rule_key(rule), next = next_slot, remaining = next_remaining, queued = 0 }',
-'  local payload = string.format(\'{"session":"%s","revision":%d,"index":%d,"token":%d,"previous":"%s","next":"%s"}\',',
-'    json_escape(S.cycle_session), S.rules_revision, index - 1, token, rule.placement, next_slot)',
-'  hl.dispatch(hl.dsp.event("hyprpin-cycle|" .. payload))',
+'    key = rule_key(rule), previous = rule.placement, next = next_slot, remaining = next_remaining, queued = 0 }',
+'  send_cycle(S.cycle_pending, rule, index)',
 '  hl.timer(function()',
 '    if S.cycle_pending and S.cycle_pending.token == token then',
 '      S.cycle_pending = nil',
@@ -1256,6 +1275,25 @@ sizesLua(),
 '    S.cycle(pending.address)',
 '    if S.cycle_pending then S.cycle_pending.queued = pending.queued - 1 end',
 '  end',
+'end',
+'',
+'-- A failed IPC reply may mean the chunk ran or never reached Hyprland.',
+'-- Resolve against a fresh rules snapshot without moving a window twice.',
+'function S.cycle_resync(token)',
+'  local pending = S.cycle_pending',
+'  if not pending or pending.token ~= token then return end',
+'  for index, rule in ipairs(S.rules) do',
+'    if rule_key(rule) == pending.key then',
+'      if rule.placement == pending.next then S.cycle_complete(token, true) return end',
+'      local previous = pending.previous or pending.sv.rule_placement',
+'      if rule.placement ~= previous then S.cycle_complete(token, false) return end',
+'      if pending.sent_session ~= S.cycle_session or pending.sent_revision ~= S.rules_revision then',
+'        send_cycle(pending, rule, index)',
+'      end',
+'      return',
+'    end',
+'  end',
+'  S.cycle_complete(token, false)',
 'end',
 '',
 '-- SUPER+Z on a tracked pop-out (wired in ~/.config/hypr/local.lua): zoom it',
@@ -1561,7 +1599,8 @@ sizesLua(),
 '  hl.timer(evaluate, { timeout = 60, type = "oneshot" })',
 'end)',
 '',
-cycleReply ? 'S.cycle_complete(' + cycleReply.token + ', ' + (cycleReply.success ? 'true' : 'false') + ')' : ''
+cycleReply ? 'S.cycle_complete(' + cycleReply.token + ', ' + (cycleReply.success ? 'true' : 'false') + ')' : '',
+cycleResync !== null ? 'S.cycle_resync(' + cycleResync + ')' : ''
         ].join("\n")
     }
 
@@ -1576,12 +1615,47 @@ cycleReply ? 'S.cycle_complete(' + cycleReply.token + ', ' + (cycleReply.success
         id: applyProc
         clearEnvironment: true
         environment: root.hyprctlEnv
+        property int code: -1
+        property bool streamDone: false
+        property string payload: ""
         stdout: StdioCollector {
             onStreamFinished: {
-                var reply = String(text).trim()
-                if (reply.length && reply !== "ok")
-                    console.warn("hyprpin: hyprctl eval said:", reply.slice(0, 400))
+                applyProc.payload = String(text).slice(0, 1024)
+                applyProc.streamDone = true
+                applyProc.finish()
             }
+        }
+        onExited: function(exitCode) { code = exitCode; finish() }
+        function finish() {
+            if (code < 0 || !streamDone)
+                return
+            var exitCode = code
+            var reply = payload.trim()
+            code = -1; streamDone = false; payload = ""
+            root.finishApply(exitCode, reply)
+        }
+    }
+
+    function finishApply(exitCode, reply) {
+        var receipt = applyReceipt
+        applyReceipt = null
+        if (exitCode === 0 && reply === "ok") {
+            applyFailures = 0
+            return
+        }
+        console.warn("hyprpin: Hyprland apply failed (exit " + exitCode + "):", reply.slice(0, 400))
+        if (++applyFailures <= 2) {
+            // A lost reply does not tell us whether Hyprland executed it.
+            // Pending tokens make replay safe even if the window already moved.
+            if (!cycleReply && receipt && receipt.reply)
+                cycleReply = receipt.reply
+            if (cycleResync === null && receipt && receipt.resync !== null)
+                cycleResync = receipt.resync
+            settle.restart()
+        } else {
+            // End this retry budget. A later keypress/settings change can
+            // start another attempt; no stale receipt blocks the writer.
+            applyFailures = 0
         }
     }
 
@@ -1603,8 +1677,11 @@ cycleReply ? 'S.cycle_complete(' + cycleReply.token + ', ' + (cycleReply.success
             settle.restart()
             return
         }
+        applyReceipt = { reply: cycleReply, resync: cycleResync }
         applyProc.command = ["/usr/bin/hyprctl", "eval", root.lua()]
         cycleReply = null
+        cycleResync = null
+        applyProc.code = -1; applyProc.streamDone = false; applyProc.payload = ""
         applyProc.running = true
     }
 
