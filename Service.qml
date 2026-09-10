@@ -237,12 +237,13 @@ Item {
     property int rulesRevision: 0
     readonly property string cycleSession: Date.now().toString(36) + Math.random().toString(36).slice(2)
     property var cycleReply: null
+    property var cycleReadback: null
 
     // A compositor event carries only a bounded rule index and snapshot ID.
     // Rule text travels to the writer on stdin, never through an executable
     // command string. Save against the latest file before moving the window.
     function handleCycle(raw) {
-        if (typeof raw !== "string" || raw.length > 1024 || cycleWriteProc.running || cycleReply)
+        if (typeof raw !== "string" || raw.length > 1024 || cycleWriteProc.running || cycleReply || cycleReadback)
             return
         var request
         try { request = JSON.parse(raw) } catch (e) { return }
@@ -260,6 +261,16 @@ Item {
         cycleWriteProc.running = true
     }
 
+    function finishCycleWrite(token, exitCode) {
+        // An older directory-watch read may still be finishing. Only a read
+        // started after this write can confirm the new placement. Keep its
+        // reply out of apply() until that fresh snapshot is available.
+        cycleReadback = { token: token, success: exitCode === 0, after: rulesReadProc.readSerial }
+        if (exitCode !== 0)
+            console.warn("hyprpin: placement save failed (exit " + exitCode + ")")
+        rulesReadProc.start()
+    }
+
     Process {
         id: cycleWriteProc
         command: ["/usr/bin/python3", "-I", root.helperPath, "placement", root.statePath, "262144"]
@@ -274,8 +285,7 @@ Item {
         }
         onExited: function(exitCode) {
             stdinEnabled = true
-            root.cycleReply = { token: token, success: exitCode === 0 }
-            rulesReadProc.start()
+            root.finishCycleWrite(token, exitCode)
         }
     }
 
@@ -293,6 +303,7 @@ Item {
         property bool streamDone: false
         property string payload: ""
         property bool rerun: false
+        property int readSerial: 0
         stdout: StdioCollector {
             onStreamFinished: {
                 rulesReadProc.payload = String(text)
@@ -303,6 +314,7 @@ Item {
         onExited: function (exitCode) { code = exitCode; finishRead() }
         function start() {
             if (running) { rerun = true; return }
+            readSerial = (readSerial + 1) % 1000000000
             code = -1; streamDone = false; payload = ""
             running = true
         }
@@ -323,8 +335,12 @@ Item {
                 root.applySoon()
             }
             payload = ""
-            if (root.cycleReply)
+            if (root.cycleReadback && readSerial !== root.cycleReadback.after) {
+                root.cycleReply = { token: root.cycleReadback.token,
+                    success: root.cycleReadback.success && code === 0 }
+                root.cycleReadback = null
                 root.apply()
+            }
             if (rerun) { rerun = false; start() }
         }
     }

@@ -13,7 +13,7 @@ const handlerEnd = service.indexOf("    Process {", handlerStart);
 const handler = service.slice(handlerStart, handlerEnd);
 const event = { session: "test", revision: 1, index: 0, token: 1, previous: "tile-right", next: "tile-bottom" };
 function receive(raw, extra = {}) {
-  const context = { raw, cycleSession: "test", rulesRevision: 1, cycleReply: null,
+  const context = { raw, cycleSession: "test", rulesRevision: 1, cycleReply: null, cycleReadback: null,
     cycleWriteProc: { running: false }, rules: [{ class: '^Test["\\]$', title: 'A "quoted" call', placement: "tile-right" }], ...extra };
   runInNewContext(`${handler}\nhandleCycle(raw)`, context, { timeout: 1000 });
   return context.cycleWriteProc;
@@ -27,6 +27,7 @@ for (const raw of [null, [], 9, "{", "null", "[]", '"text"', " ".repeat(1025),
     { next: 'tile-right";os.execute("bad")' }].map(part => JSON.stringify({ ...event, ...part })),
 ]) assert.equal(receive(raw).running, false, `must refuse ${raw}`);
 assert.equal(receive(JSON.stringify(event), { cycleReply: { token: 1, success: true } }).running, false);
+assert.equal(receive(JSON.stringify(event), { cycleReadback: { token: 1, success: true, after: 1 } }).running, false);
 console.log("ok: compositor event schema, snapshot identity, and stdin serialization checks");
 
 const laps = [

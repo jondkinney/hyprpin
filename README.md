@@ -195,6 +195,7 @@ python3 tests/test-placement-state.py
 node tests/test-window-close.mjs
 node tests/test-floating.mjs
 node tests/test-cycle.mjs
+node tests/test-cycle-sync.mjs
 ```
 
 The regression tests use Node.js to generate the actual Lua engine from
@@ -204,7 +205,8 @@ exercise malformed state, byte limits, and persistence through the real QML
 parser into a fresh engine. Node.js and the Lua CLI are development dependencies.
 Cycle tests cover every starting slot, full rule reapplication between presses,
 queued presses, failed saves, zoom, scratchpad, and adoption after a compositor
-reload. Placement-writer tests exercise stale requests, concurrent edits,
+reload. Save-confirmation tests cover pre-save reads, interleaved applies, read
+failures, and focus changes while saving. Placement-writer tests exercise stale requests, concurrent edits,
 malformed data, symlinks, FIFOs, and byte limits.
 
 ## Security boundaries
@@ -230,7 +232,8 @@ The plugin's external boundaries, and the contract at each:
   checks the rule identity and previous placement, and atomically publishes
   only the placement change. Other rule fields are preserved. Panel writes
   share the lock. The engine moves the window after the service reloads the
-  saved rules and acknowledges success; a failed save leaves it in place.
+  saved rules through a read started after the write and acknowledges success;
+  a failed save leaves it in place.
 - **The engine** is generated Lua pushed into Hyprland with `hyprctl eval`.
   Everything injected into it passes through an escaping serializer with
   per-string caps. The engine reads no files: remembered sizes are injected

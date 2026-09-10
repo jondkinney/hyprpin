@@ -169,6 +169,20 @@ if mode == "cycle" then
   check("cycling a zoomed edge clears zoom and changes rule", sv.edge == "bottom" and not sv.big_prev)
   reset("tile-right")
   w, sv = pop()
+  assert(__hyprpin.cycle(w.address))
+  local other = new_window("0x2")
+  local other_rect, focus_calls = rect(other), 0
+  hl.get_active_window = function() return other end
+  local focus_dispatch = hl.dispatch
+  hl.dispatch = function(command)
+    if command.method == "focus" then focus_calls = focus_calls + 1 end
+    focus_dispatch(command)
+  end
+  dofile(arg[3] .. "/1-1.lua")
+  check("focus changes during a save still move the original window", sv.rule_placement == "tile-bottom" and sv.edge == "bottom")
+  check("completing a save leaves the newly focused window alone", same(other, other_rect) and focus_calls == 0)
+  reset("tile-right")
+  w, sv = pop()
   toggle(w)
   position(w, 100, 100, 700, 250)
   assert(__hyprpin.cycle(w.address))
