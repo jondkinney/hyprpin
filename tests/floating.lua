@@ -266,6 +266,7 @@ if mode == "cycle" then
     assert(__hyprpin.send_to_scratchpad(w.address))
     dofile(arg[3] .. "/park-1.lua")
     check("explicit send unpins and releases the edge immediately", not w.pinned and not sv.edge_monitor)
+    check("scratchpad layout owns the former floating edge or corner", not w.floating)
     check("explicit send parks the original window and saves its rule",
       w.workspace.special and sv.special and sv.rule_placement == "special" and sv.workspace_id == home)
     check("presses during the send cannot bring it back out", not __hyprpin.cycle_pending and #events == 1)
@@ -273,8 +274,9 @@ if mode == "cycle" then
     workspace(2)
     check("parked window stays hidden across workspaces", w.workspace.special and not w.pinned)
     monitors[1].active_special_workspace = w.workspace
+    w.floating = true
     assert(__hyprpin.send_to_scratchpad(w.address))
-    check("sending an already parked window just hides it", not monitors[1].active_special_workspace and #events == 1)
+    check("sending an already parked window re-tiles and hides it", not w.floating and not monitors[1].active_special_workspace and #events == 1)
     monitors[1].active_special_workspace = w.workspace
     assert(__hyprpin.cycle(w.address))
     check("summoned window re-enters cycle at tiled right", __hyprpin.cycle_pending.next == "tile-right")
@@ -289,7 +291,7 @@ if mode == "cycle" then
     monitors[1].active_special_workspace = { name = "special:scratchpad" }
     assert(__hyprpin.send_to_scratchpad(w.address))
     dofile(arg[3] .. "/park-1.lua")
-    check("send handles " .. change, w.workspace.special and not w.pinned and not sv.big_prev and not sv.dock and not sv.detached)
+    check("send handles " .. change, w.workspace.special and not w.floating and not w.pinned and not sv.big_prev and not sv.dock and not sv.detached)
     check("send hides an already open scratchpad overlay", not monitors[1].active_special_workspace)
   end
   reset("tile-right")

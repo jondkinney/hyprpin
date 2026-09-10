@@ -139,7 +139,9 @@ Wired in `~/.config/hypr/local.lua`:
   SUPER+P's stock pseudo-window behavior.
 - **SUPER+ALT+S** -- send the focused Hyprpin window to the scratchpad and
   save **Scratchpad** as its placement. A tiled edge releases its reserved
-  space as soon as the save completes. This also works while zoomed, detached,
+  space as soon as the save completes. The window joins the scratchpad's tiling
+  layout, which recalculates its size alongside any windows already there.
+  This also works while zoomed, detached,
   or temporarily tiled with SUPER+T. Pending cycle presses are discarded so
   they cannot bring the window straight back out. **SUPER+S** summons it;
   focus it and press **SUPER+P** to return at tiled right. Sending an already
