@@ -123,6 +123,20 @@ Wired in `~/.config/hypr/local.lua`:
   again puts it back. Does nothing on a window that is not a pop-out, or on
   one parked in the scratchpad. A tiled edge keeps its reservation while
   zoomed.
+- **SUPER+P** -- cycle the focused Hyprpin window's saved placement. Starting
+  at its current edge or corner, visit the other three positions clockwise
+  before changing type. A tiled lap leads to floating top-right; a floating
+  lap leads to scratchpad; scratchpad leads to tiled right. For example,
+  starting tiled bottom: **tiled left → top → right → floating top-right →
+  bottom-right → bottom-left → top-left → scratchpad**. Bring the scratchpad
+  back with SUPER+S and press SUPER+P to start the tiled lap again.
+  Each step updates the rule shown in settings and survives shell restarts,
+  compositor reloads, and reboots. A new window starts a fresh lap at its saved
+  placement. SUPER+T also starts a fresh lap from the resulting type/position.
+  SUPER+P while zoomed changes the underlying placement and clears the zoom.
+  The **Fill it** placement stays available in settings; the cycle uses the
+  four tiled edges, four floating corners, and scratchpad. Ordinary windows
+  retain SUPER+P's stock pseudo-window behavior.
 - **SUPER+T on an edge pin** -- float it out of its reserved edge, releasing
   that space to the other tiles immediately. It stays pinned across workspaces,
   including its home workspace with **Stay pinned** off. Move and resize it
@@ -157,14 +171,30 @@ delete the file (or one entry) to forget. Existing size-only entries still work.
 Edge thickness and floating geometry are stored separately per rule. A pop-out
 docked into a workspace is not recorded, since the layout sizes it.
 
+The plugin leaves keyboard configuration to your Hyprland config. To add the
+SUPER+P binding, put this in `~/.config/hypr/local.lua` (or your bindings file):
+
+```lua
+hl.unbind("SUPER + P")
+o.bind("SUPER + P", "Cycle Hyprpin placement / pseudo window", function()
+  local window = hl.get_active_window()
+  if not window then return end
+  local hyprpin = _G.__hyprpin
+  if hyprpin and hyprpin.cycle and hyprpin.cycle(window.address) then return end
+  hl.dispatch(hl.dsp.window.pseudo())
+end)
+```
+
 ## Development checks
 
 ```bash
 omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Service.qml HyprpinPanel.qml
 python3 tests/test-statefile.py
+python3 tests/test-placement-state.py
 node tests/test-window-close.mjs
 node tests/test-floating.mjs
+node tests/test-cycle.mjs
 ```
 
 The regression tests use Node.js to generate the actual Lua engine from
@@ -172,6 +202,10 @@ The regression tests use Node.js to generate the actual Lua engine from
 floating/docking/zoom transitions, and saved geometry. The floating tests also
 exercise malformed state, byte limits, and persistence through the real QML
 parser into a fresh engine. Node.js and the Lua CLI are development dependencies.
+Cycle tests cover every starting slot, full rule reapplication between presses,
+queued presses, failed saves, zoom, scratchpad, and adoption after a compositor
+reload. Placement-writer tests exercise stale requests, concurrent edits,
+malformed data, symlinks, FIFOs, and byte limits.
 
 ## Security boundaries
 
@@ -188,6 +222,15 @@ The plugin's external boundaries, and the contract at each:
   QML re-checks length and validates every field, count, and range after
   parsing. `tests/test-statefile.py` exercises the boundaries: exact limit
   and one over, symlinks, FIFOs, planted destination links, oversized input.
+- **Placement cycling** sends an event under Hyprland's 1 KiB event cap with
+  a rule index, service-session identity, rules revision, and placement enum.
+  The service validates it against its current snapshot, then passes a delta
+  of at most 4 KiB on stdin to `statefile.py placement`. Under a validated
+  descriptor-relative lock, the helper reads the latest bounded rules file,
+  checks the rule identity and previous placement, and atomically publishes
+  only the placement change. Other rule fields are preserved. Panel writes
+  share the lock. The engine moves the window after the service reloads the
+  saved rules and acknowledges success; a failed save leaves it in place.
 - **The engine** is generated Lua pushed into Hyprland with `hyprctl eval`.
   Everything injected into it passes through an escaping serializer with
   per-string caps. The engine reads no files: remembered sizes are injected

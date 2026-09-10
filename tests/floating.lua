@@ -1,7 +1,7 @@
 -- Behavioral compositor model: dispatches update window geometry and workspace
 -- membership, and workspace rules retain their enabled state like Hyprland's.
 local engine, mode = assert(arg[1]), arg[2]
-local windows, monitors, handlers, timers, rules
+local windows, monitors, handlers, timers, rules, events
 local checks = 0
 local function check(message, condition)
   assert(condition, message)
@@ -14,13 +14,16 @@ local function same(w, r)
 end
 local function reset(placement, stay)
   _G.__hyprpin = nil
-  windows, handlers, timers, rules = {}, {}, {}, {}
+  windows, handlers, timers, rules, events = {}, {}, {}, {}, {}
   monitors = {
     { name = "DP-1", width = 1920, height = 1080, scale = 1, transform = 0,
       position = { x = 0, y = 0 }, reserved = { top = 30 }, active_workspace = { id = 1, name = "1" } },
     { name = "DP-2", width = 2560, height = 1440, scale = 1, transform = 0,
       position = { x = -2560, y = -200 }, reserved = { top = 40 }, active_workspace = { id = 4, name = "4" } },
   }
+  for _, m in ipairs(monitors) do
+    function m:set_special_workspace() self.active_special_workspace = nil end
+  end
   local function get_window(selector)
     for _, w in ipairs(windows) do if selector == "address:" .. w.address then return w end end
   end
@@ -29,6 +32,7 @@ local function reset(placement, stay)
   end
   hl = {
     get_windows = function() return windows end, get_window = get_window, get_monitor = get_monitor,
+    get_active_window = function() return windows[1] end,
     get_config = function(key)
       if key == "general:border_size" then return 2 end
       if key == "general:gaps_in" then return 5 end
@@ -48,10 +52,13 @@ local function reset(placement, stay)
       table.insert(rules, rule)
       return rule
     end,
-    dsp = { window = setmetatable({}, { __index = function(_, method)
+    dsp = { event = function(payload) return { method = "event", payload = payload } end,
+      focus = function(options) return { method = "focus", options = options } end,
+      window = setmetatable({}, { __index = function(_, method)
       return function(options) return { method = method, options = options } end
     end }) },
     dispatch = function(command)
+      if command.method == "event" then table.insert(events, command.payload) return end
       local op, options = command.method, command.options
       local w = assert(get_window(options.window), options.window)
       if op == "pin" then
@@ -67,7 +74,7 @@ local function reset(placement, stay)
         end
         if options.x then w.at = { x = options.x, y = options.y } end
       elseif op == "fullscreen_state" then w.fullscreen = options.internal
-      elseif op ~= "alter_zorder" then error("unhandled dispatch: " .. op) end
+      elseif op ~= "alter_zorder" and op ~= "focus" then error("unhandled dispatch: " .. op) end
     end,
   }
   dofile(engine)
@@ -110,7 +117,109 @@ end
 local function custom(w) position(w, 480, 90, 960, 270) return rect(w) end
 local key = "^Test$\31"
 
-if mode == "reopen" then
+if mode == "cycle" then
+  local starts = { "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left" }
+  local expected = {
+    { "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
+    { "tile-left", "tile-top", "tile-right", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
+    { "tile-top", "tile-right", "tile-bottom", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
+    { "tile-right", "tile-bottom", "tile-left", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
+    { "bottom-right", "bottom-left", "top-left", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
+    { "bottom-left", "top-left", "top-right", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
+    { "top-left", "top-right", "bottom-right", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
+    { "top-right", "bottom-right", "bottom-left", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
+  }
+  for case, start in ipairs(starts) do
+    reset(start)
+    local w, sv = pop()
+    local original_home = sv.workspace_id
+    for step, next_slot in ipairs(expected[case]) do
+      if w.workspace.special then monitors[1].active_special_workspace = w.workspace end
+      local before = rect(w)
+      assert(__hyprpin.cycle(w.address))
+      check(start .. " step " .. step .. " waits for durable save", same(w, before) and #events == step)
+      local p = assert(__hyprpin.cycle_pending)
+      check(start .. " step " .. step .. " chooses " .. next_slot, p.next == next_slot)
+      check("event is bounded and carries no window text", #events[step] < 1024 and not events[step]:find("Test"))
+      dofile(arg[3] .. "/" .. case .. "-" .. step .. ".lua")
+      check("rule reapply commits to same tracked window and original home",
+        __hyprpin.saved[w.address] == sv and sv.workspace_id == original_home and sv.rule_placement == next_slot)
+      if next_slot == "special" then
+        check("scratchpad is unpinned and releases its stripe", w.workspace.special and not w.pinned and not sv.edge_monitor)
+      elseif next_slot:find("tile-", 1, true) == 1 then
+        check("edge cycle remains pinned with a reservation", w.pinned and sv.edge_monitor == "DP-1")
+        check("leaving scratchpad closes its overlay", not monitors[1].active_special_workspace)
+      else
+        check("floating lap uses a corner-sized rectangle", w.pinned and w.size.y < 600 and not sv.edge_monitor)
+        local right, bottom = next_slot:find("right"), next_slot:find("bottom")
+        check("floating lap actually reaches selected corner", (right and w.at.x > 900 or not right and w.at.x < 100)
+          and (bottom and w.at.y > 500 or not bottom and w.at.y < 100))
+      end
+    end
+  end
+  reset("tile-right")
+  local w, sv = pop()
+  zoom(w)
+  assert(__hyprpin.cycle(w.address))
+  dofile(arg[3] .. "/1-1.lua")
+  check("cycling a zoomed edge clears zoom and changes rule", sv.edge == "bottom" and not sv.big_prev)
+  reset("tile-right")
+  w, sv = pop()
+  toggle(w)
+  position(w, 100, 100, 700, 250)
+  assert(__hyprpin.cycle(w.address))
+  check("detached pin starts a floating lap from its actual corner", __hyprpin.cycle_pending.next == "top-right")
+  local before, token = rect(w), __hyprpin.cycle_pending.token
+  __hyprpin.cycle_complete(token, false)
+  check("failed save keeps live placement and rule", same(w, before) and sv.rule_placement == "tile-right")
+  assert(__hyprpin.cycle(w.address))
+  tick(15000)
+  check("missing shell reply expires without moving the window", not __hyprpin.cycle_pending and same(w, before))
+  reset("tile-right")
+  w, sv = pop()
+  for _ = 1, 9 do assert(__hyprpin.cycle(w.address)) end
+  check("rapid presses queue behind one save", #events == 1 and __hyprpin.cycle_pending.queued == 8)
+  for step = 1, 9 do dofile(arg[3] .. "/1-" .. step .. ".lua") end
+  check("all rapid presses complete in order", #events == 9 and sv.rule_placement == "tile-right" and not __hyprpin.cycle_pending)
+  reset("tile-right")
+  w, sv = pop()
+  assert(__hyprpin.cycle(w.address))
+  emit("window.close", w)
+  dofile(arg[3] .. "/1-1.lua")
+  check("late save acknowledgment cannot resurrect a closed pin", not __hyprpin.saved[w.address])
+  reset("bottom-right")
+  w = new_window()
+  check("ordinary windows use stock fallback", not __hyprpin.cycle(w.address))
+  w.pinned, w.floating = true, true
+  position(w, 1400, 700, 450, 250)
+  assert(__hyprpin.cycle(w.address))
+  dofile(arg[3] .. "/6-1.lua")
+  check("matching hand-pinned window can be adopted after a compositor reload", __hyprpin.saved[w.address].rule_placement == "bottom-left")
+  reset("bottom-right")
+  __hyprpin.sizes[key] = { w = 1910, h = 300 }
+  w, sv = pop()
+  check("nearly full-width corner stays within the monitor", w.at.x >= 0 and w.at.x + w.size.x <= 1920)
+  assert(__hyprpin.cycle(w.address))
+  check("nearly full-width float follows its selected corner", __hyprpin.cycle_pending.next == "bottom-left")
+  reset("tile-top")
+  w, sv = pop()
+  for step = 1, 3 do
+    assert(__hyprpin.cycle(w.address))
+    dofile(arg[3] .. "/4-" .. step .. ".lua")
+  end
+  local dispatch = hl.dispatch
+  hl.dispatch = function(command)
+    if command.method ~= "resize" then dispatch(command) end
+  end
+  assert(__hyprpin.cycle(w.address))
+  dofile(arg[3] .. "/4-4.lua")
+  check("cycle saves requested corner dimensions separately from edge size",
+    __hyprpin.sizes[key].floating.w == 422 and __hyprpin.sizes[key].floating.h == 237)
+  assert(__hyprpin.cycle(w.address))
+  check("next press during resize continues from requested corner", __hyprpin.cycle_pending.next == "bottom-right")
+  print("all " .. checks .. " cycle checks passed")
+  return
+elseif mode == "reopen" then
   reset()
   local w, sv = pop()
   local edge = rect(w)

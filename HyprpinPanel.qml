@@ -809,7 +809,7 @@ Panel {
                                 PanelToolTip {
                                     visible: parent.hoverNow && !parent.popupOpen
                                     delay: 350
-                                    text: "Tiled: reserves that edge on every workspace. SUPER+T switches between the edge and a remembered floating position; move or resize the float to set it.\nScratchpad: hides it in the scratchpad instead; SUPER+S brings it up."
+                                    text: "SUPER+P: visits the other three positions clockwise, then changes type: tiled, floating, scratchpad. Each step saves this rule.\nSUPER+T: switches an edge pin to its remembered float and back.\nScratchpad: SUPER+S brings it up."
                                     fontFamily: root.fontFamily
                                 }
                             }

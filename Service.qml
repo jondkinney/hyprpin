@@ -234,6 +234,56 @@ Item {
 
     property bool rulesReadOnce: false
     property bool sizesReadOnce: false
+    property int rulesRevision: 0
+    readonly property string cycleSession: Date.now().toString(36) + Math.random().toString(36).slice(2)
+    property var cycleReply: null
+
+    // A compositor event carries only a bounded rule index and snapshot ID.
+    // Rule text travels to the writer on stdin, never through an executable
+    // command string. Save against the latest file before moving the window.
+    function handleCycle(raw) {
+        if (typeof raw !== "string" || raw.length > 1024 || cycleWriteProc.running || cycleReply)
+            return
+        var request
+        try { request = JSON.parse(raw) } catch (e) { return }
+        if (!request || request.session !== cycleSession || request.revision !== rulesRevision
+                || !Number.isInteger(request.token) || request.token < 1 || request.token > 1000000000
+                || !Number.isInteger(request.index) || request.index < 0 || request.index >= rules.length
+                || ["tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left", "special"].indexOf(request.next) < 0)
+            return
+        var rule = rules[request.index]
+        if (rule.placement !== request.previous)
+            return
+        cycleWriteProc.token = request.token
+        cycleWriteProc.payload = JSON.stringify({ "class": rule["class"], title: rule.title,
+            previous: rule.placement, next: request.next })
+        cycleWriteProc.running = true
+    }
+
+    Process {
+        id: cycleWriteProc
+        command: ["/usr/bin/python3", "-I", root.helperPath, "placement", root.statePath, "262144"]
+        clearEnvironment: true
+        stdinEnabled: true
+        property int token: 0
+        property string payload: ""
+        onStarted: {
+            write(payload)
+            payload = ""
+            stdinEnabled = false
+        }
+        onExited: function(exitCode) {
+            stdinEnabled = true
+            root.cycleReply = { token: token, success: exitCode === 0 }
+            rulesReadProc.start()
+        }
+    }
+
+    Timer {
+        interval: 10000
+        running: cycleWriteProc.running
+        onTriggered: cycleWriteProc.signal(9)
+    }
 
     Process {
         id: rulesReadProc
@@ -268,10 +318,13 @@ Item {
             } else {
                 root.enabled = next.enabled
                 root.rules = next.rules
+                root.rulesRevision++
                 root.rulesReadOnce = true
                 root.applySoon()
             }
             payload = ""
+            if (root.cycleReply)
+                root.apply()
             if (rerun) { rerun = false; start() }
         }
     }
@@ -406,6 +459,8 @@ Item {
 '-- Whatever is popped out right now stays tracked across a re-apply, so',
 '-- changing a setting mid-call cannot strand a window.',
 'S.saved = S.saved or {}',
+'S.cycle_session = ' + luaString(cycleSession),
+'S.rules_revision = ' + rulesRevision,
 '',
 'S.rules = {',
 rulesLua(),
@@ -543,8 +598,10 @@ sizesLua(),
 '    w = math.min(override.w, uw)',
 '    h = math.min(override.h, uh)',
 '  end',
-'  local x = placement:find("left") and (ux + S.margin) or (ux + uw - w - S.margin)',
-'  local y = placement:find("top") and (uy + S.margin) or (uy + uh - h - S.margin)',
+'  w, h = math.min(w, uw), math.min(h, uh)',
+'  local mx, my = math.min(S.margin, (uw - w) / 2), math.min(S.margin, (uh - h) / 2)',
+'  local x = placement:find("left") and (ux + mx) or (ux + uw - w - mx)',
+'  local y = placement:find("top") and (uy + my) or (uy + uh - h - my)',
 '  return w, h, math.floor(x + 0.5), math.floor(y + 0.5)',
 'end',
 '',
@@ -714,6 +771,7 @@ sizesLua(),
 '  if last and last.x == observed.x and last.y == observed.y and last.w == observed.w',
 '      and last.h == observed.h and last.monitor == observed.monitor then return false end',
 '  sv.float_observed = observed',
+'  sv.cycle_slot, sv.cycle_remaining = nil, nil',
 '  local uw, uh, ux, uy = usable(window.monitor)',
 '  local function fraction(offset, travel)',
 '    if travel <= 0 then return 0 end',
@@ -760,14 +818,21 @@ sizesLua(),
 '  if place_on.name ~= (window.monitor and window.monitor.name) then',
 '    hl.dispatch(hl.dsp.window.move({ window = selector, monitor = place_on.name, follow = false }))',
 '  end',
-'  local w, h, x, y = float_geometry(place_on, sv, rule)',
+'  local w, h, x, y',
+'  if sv.cycle_anchor then',
+'    w, h, x, y = geometry(place_on, sv.placed_at, sv.cycle_anchor)',
+'    sv.cycle_anchor = nil',
+'  else',
+'    w, h, x, y = float_geometry(place_on, sv, rule)',
+'  end',
 '  hl.dispatch(hl.dsp.window.float({ window = selector, action = "on" }))',
 '  hl.dispatch(hl.dsp.window.resize({ window = selector, x = w, y = h, exact = true }))',
 '  hl.dispatch(hl.dsp.window.move({ window = selector, x = x, y = y, exact = true }))',
 '  hl.dispatch(hl.dsp.window.pin({ window = selector, action = "on" }))',
 '  hl.dispatch(hl.dsp.window.alter_zorder({ window = selector, mode = "top" }))',
 '  sv.expected_w, sv.expected_h = w, h',
-'  sv.float_observed = observed_float(window)',
+'  sv.placed_rect = { x = x, y = y, w = w, h = h, monitor = place_on.name }',
+'  sv.float_observed = sv.placed_rect',
 '  sv.tiled = false',
 'end',
 '',
@@ -1008,6 +1073,175 @@ sizesLua(),
 '  end',
 'end',
 '',
+'-- A lap starts at the current position, visits the other three clockwise,',
+'-- then changes type. Only the selected rule placement needs to survive a',
+'-- reboot; the next lap starts at that restored position.',
+'local edge_lap = { "tile-right", "tile-bottom", "tile-left", "tile-top" }',
+'local float_lap = { "top-right", "bottom-right", "bottom-left", "top-left" }',
+'',
+'local function cycle_notice()',
+'  if hl.notification then',
+'    hl.notification.create({ text = "Hyprpin: placement could not be saved. Try SUPER+P again.", duration = 4000 })',
+'  end',
+'end',
+'',
+'local function cycle_position(window, sv)',
+'  if sv.special then return "special" end',
+'  if sv.edge and not sv.detached then return "tile-" .. sv.edge end',
+'  if sv.cycle_slot and sv.cycle_remaining ~= nil then return sv.cycle_slot end',
+'  if sv.tiled then return sv.placed_at or "top-right" end',
+'  if sv.placed_at == "fill" then return "top-right" end',
+'  -- With a very wide float, the right margin can put its center left of',
+'  -- the screen center. Keep the selected slot until the user moves it.',
+'  local last = sv.placed_rect',
+'  local actual = sv.big_prev or observed_float(window)',
+'  if not sv.detached and last and last.x == actual.x and last.y == actual.y',
+'      and last.w == actual.w and last.h == actual.h then return sv.placed_at end',
+'  local m = window.monitor',
+'  local uw, uh, ux, uy = usable(m)',
+'  local at = sv.big_prev or { x = window.at.x, y = window.at.y, w = window.size.x, h = window.size.y }',
+'  local right = at.x + at.w / 2 >= ux + uw / 2',
+'  local bottom = at.y + at.h / 2 >= uy + uh / 2',
+'  return (bottom and "bottom-" or "top-") .. (right and "right" or "left")',
+'end',
+'',
+'local function cycle_target(current, remaining)',
+'  if current == "special" then return "tile-right", 3 end',
+'  local edge = edge_side(current) ~= nil',
+'  if remaining == 0 then return edge and "top-right" or "special", 3 end',
+'  local lap = edge and edge_lap or float_lap',
+'  for i, slot in ipairs(lap) do',
+'    if slot == current then return lap[i % 4 + 1], remaining - 1 end',
+'  end',
+'  return "top-right", 3',
+'end',
+'',
+'-- Apply a saved placement without replacing the original home/restore data.',
+'local function cycle_place(window, sv, rule)',
+'  sv.cycle_edges = sv.cycle_edges or {}',
+'  if sv.edge and sv.edge_size then',
+'    sv.cycle_edges[(sv.edge == "left" or sv.edge == "right") and "w" or "h"] = sv.edge_size',
+'  end',
+'  release_edge(sv)',
+'  local was_special = window.workspace and window.workspace.special',
+'  local source_monitor = window.monitor',
+'  local focused = hl.get_active_window()',
+'  local keep_focus = focused and focused.address == window.address',
+'  sv.big_prev, sv.dock, sv.detached = nil, false, false',
+'  sv.fill_monitor, sv.edge_size = nil, nil',
+'  sv.edge, sv.special = edge_side(rule.placement), rule.placement == "special"',
+'  sv.rule_placement, sv.rule_monitor = rule.placement, rule.monitor',
+'  sv.placement, sv.placed_at = rule.placement, rule.placement',
+'  local target = (rule.monitor ~= "" and hl.get_monitor(rule.monitor)) or window.monitor',
+'  if not target then return end',
+'  sv.placed_on = target.name',
+'  local selector = "address:" .. window.address',
+'  if sv.special then',
+'    if window.pinned then hl.dispatch(hl.dsp.window.pin({ window = selector, action = "off" })) end',
+'  elseif was_special then',
+'    local dest = target.active_workspace',
+'    if not dest or dest.special then return end',
+'    hl.dispatch(hl.dsp.window.move({ window = selector, workspace = dest.name, follow = false }))',
+'    local visible_special = source_monitor and source_monitor.active_special_workspace',
+'    if keep_focus and visible_special and visible_special.name == S.special then',
+'      source_monitor:set_special_workspace({})',
+'    end',
+'  end',
+'  if sv.edge then',
+'    local uw, uh = usable(target)',
+'    local sideways = sv.edge == "left" or sv.edge == "right"',
+'    sv.edge_size = sv.cycle_edges[sideways and "w" or "h"] or math.floor((sideways and uw or uh) * S.edge_fraction + 0.5)',
+'  elseif not sv.special then',
+'    local entry = S.sizes[sv.rule_key]',
+'    local w, h = geometry(target, rule.placement, entry and entry.floating)',
+'    sv.cycle_anchor = { w = w, h = h }',
+'  end',
+'  place(window, sv, rule)',
+'  if keep_focus and not sv.special then hl.dispatch(hl.dsp.focus({ window = selector })) end',
+'  if sv.edge and not sv.detached then',
+'    local entry = S.sizes[sv.rule_key] or {}',
+'    entry.w, entry.h = sv.expected_w, sv.expected_h',
+'    S.sizes[sv.rule_key] = entry',
+'    persist_sizes()',
+'  elseif not sv.special then',
+'    sv.float_observed = nil',
+'    -- Save the requested corner geometry separately from the edge size.',
+'    local rect = sv.placed_rect',
+'    remember_window({ pinned = true, floating = true, monitor = target,',
+'      at = { x = rect.x, y = rect.y }, size = { x = rect.w, y = rect.h } }, sv)',
+'  end',
+'end',
+'',
+'function S.cycle(address)',
+'  if not S.enabled then return false end',
+'  local window = hl.get_window("address:" .. address)',
+'  if not window or not window.monitor then return false end',
+'  local sv = S.saved[address]',
+'  local rule, index',
+'  for i, r in ipairs(S.rules) do',
+'    if (sv and sv.rule_key == rule_key(r)) or (not sv and r == eligible(window)) then rule, index = r, i break end',
+'  end',
+'  if not rule then return false end',
+'  if not window.pinned and not (sv and (sv.dock or sv.special))',
+'      and not (rule.placement == "special" and window.workspace and window.workspace.special) then return false end',
+'  if S.cycle_pending then',
+'    if S.cycle_pending.address == address then S.cycle_pending.queued = math.min(16, S.cycle_pending.queued + 1) end',
+'    return true',
+'  end',
+'  local adopt = not sv',
+'  if adopt then',
+'    local home = window.workspace and not window.workspace.special and window.workspace or window.monitor.active_workspace',
+'    if not home then return false end',
+'    sv = { monitor = window.monitor.name, workspace_id = home.id, workspace_name = home.name,',
+'      floating = window.floating, fullscreen = window.fullscreen, fullscreen_client = window.fullscreen_client,',
+'      at = { x = window.at.x, y = window.at.y }, size = { x = window.size.x, y = window.size.y },',
+'      rule_key = rule_key(rule), rule_placement = rule.placement, rule_monitor = rule.monitor,',
+'      placement = rule.placement, placed_at = rule.placement, placed_on = window.monitor.name,',
+'      edge = edge_side(rule.placement), special = rule.placement == "special" }',
+'  end',
+'  local current = cycle_position(window, sv)',
+'  if not sv.cycle_slot then remember_window(window, sv) end',
+'  local remaining = sv.cycle_slot == current and sv.cycle_remaining or 3',
+'  local next_slot, next_remaining = cycle_target(current, remaining)',
+'  S.cycle_seq = (S.cycle_seq or 0) % 1000000000 + 1',
+'  local token = S.cycle_seq',
+'  S.cycle_pending = { token = token, address = address, sv = sv, adopt = adopt,',
+'    key = rule_key(rule), next = next_slot, remaining = next_remaining, queued = 0 }',
+'  local payload = string.format(\'{"session":"%s","revision":%d,"index":%d,"token":%d,"previous":"%s","next":"%s"}\',',
+'    json_escape(S.cycle_session), S.rules_revision, index - 1, token, rule.placement, next_slot)',
+'  hl.dispatch(hl.dsp.event("hyprpin-cycle|" .. payload))',
+'  hl.timer(function()',
+'    if S.cycle_pending and S.cycle_pending.token == token then',
+'      S.cycle_pending = nil',
+'      cycle_notice()',
+'    end',
+'  end, { timeout = 15000, type = "oneshot" })',
+'  return true',
+'end',
+'',
+'function S.cycle_complete(token, success)',
+'  local pending = S.cycle_pending',
+'  if not pending or pending.token ~= token then return end',
+'  S.cycle_pending = nil',
+'  local window = hl.get_window("address:" .. pending.address)',
+'  if not S.enabled or not window then return end',
+'  local rule',
+'  for _, r in ipairs(S.rules) do if rule_key(r) == pending.key then rule = r break end end',
+'  if not success or not rule or rule.placement ~= pending.next then cycle_notice() return end',
+'  local sv = S.saved[pending.address]',
+'  if not sv and pending.adopt and (window.pinned or pending.sv.special) then',
+'    sv = pending.sv',
+'    S.saved[pending.address] = sv',
+'  end',
+'  if sv ~= pending.sv then return end',
+'  cycle_place(window, sv, rule)',
+'  sv.cycle_slot, sv.cycle_remaining = pending.next, pending.remaining',
+'  if pending.queued > 0 then',
+'    S.cycle(pending.address)',
+'    if S.cycle_pending then S.cycle_pending.queued = pending.queued - 1 end',
+'  end',
+'end',
+'',
 '-- SUPER+Z on a tracked pop-out (wired in ~/.config/hypr/local.lua): zoom it',
 '-- to half the display wide, 80% tall, centered -- and back where it was.',
 'function S.toggle_big(address)',
@@ -1112,6 +1346,7 @@ sizesLua(),
 '  local window = hl.get_window("address:" .. address)',
 '  local sv = window and S.saved[address]',
 '  if not sv then return false end',
+'  sv.cycle_slot, sv.cycle_remaining = nil, nil',
 '  local rule = eligible(window)',
 '  if sv.edge then',
 '    remember_window(window, sv)',
@@ -1259,6 +1494,7 @@ sizesLua(),
 '  for address, sv in pairs(S.saved) do',
 '    local r = sv.rule_key and by_key[sv.rule_key]',
 '    if r and sv.rule_placement',
+'        and not (S.cycle_pending and S.cycle_pending.address == address)',
 '        and (sv.rule_placement ~= r.placement or sv.rule_monitor ~= r.monitor) then',
 '      if sv.dock then',
 '        sv.rule_placement, sv.rule_monitor = r.placement, r.monitor',
@@ -1307,7 +1543,9 @@ sizesLua(),
 '  -- The monitor\'s active_workspace is not settled while the event fires, and',
 '  -- the delay coalesces a burst of switches into one evaluation.',
 '  hl.timer(evaluate, { timeout = 60, type = "oneshot" })',
-'end)'
+'end)',
+'',
+cycleReply ? 'S.cycle_complete(' + cycleReply.token + ', ' + (cycleReply.success ? 'true' : 'false') + ')' : ''
         ].join("\n")
     }
 
@@ -1350,6 +1588,7 @@ sizesLua(),
             return
         }
         applyProc.command = ["/usr/bin/hyprctl", "eval", root.lua()]
+        cycleReply = null
         applyProc.running = true
     }
 
@@ -1371,6 +1610,9 @@ sizesLua(),
         function onRawEvent(event) {
             if (event && event.name === "configreloaded")
                 root.applySoon()
+            else if (event && event.name === "custom" && typeof event.data === "string"
+                    && event.data.length <= 1024 && event.data.indexOf("hyprpin-cycle|") === 0)
+                root.handleCycle(event.data.slice(14))
         }
     }
 
