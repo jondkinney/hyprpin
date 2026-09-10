@@ -809,7 +809,7 @@ Panel {
                                 PanelToolTip {
                                     visible: parent.hoverNow && !parent.popupOpen
                                     delay: 350
-                                    text: "SUPER+P: visits the other three positions clockwise, then switches between tiled and floating. Each step saves this rule.\nSUPER+T: switches an edge pin to its remembered float and back.\nSUPER+ALT+S: sends it to the scratchpad and saves this rule. SUPER+S brings it up."
+                                    text: "SUPER+P: visits the other three positions clockwise, then switches between tiled and floating. Each step saves this rule.\nSUPER+T: switches an edge pin to its remembered float and back. Inside scratchpad, toggles tiled/floating without leaving it.\nSUPER+ALT+S: sends it to the scratchpad using its saved mode and position. SUPER+S brings it up; SUPER+P brings it out."
                                     fontFamily: root.fontFamily
                                 }
                             }
@@ -830,6 +830,8 @@ Panel {
                             }
 
                             ToggleSwitch {
+                                enabled: modelData.placement !== "special"
+                                opacity: enabled ? 1 : 0.4
                                 checked: modelData.stay === true
                                 foreground: root.foreground
                                 onToggled: root.setField(index, "stay", !(modelData.stay === true))

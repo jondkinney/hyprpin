@@ -139,8 +139,8 @@ Wired in `~/.config/hypr/local.lua`:
   SUPER+P's stock pseudo-window behavior.
 - **SUPER+ALT+S** -- send the focused Hyprpin window to the scratchpad and
   save **Scratchpad** as its placement. A tiled edge releases its reserved
-  space as soon as the save completes. The window joins the scratchpad's tiling
-  layout, which recalculates its size alongside any windows already there.
+  space as soon as the save completes. The first send joins the scratchpad's
+  tiling layout; subsequent sends use its remembered scratchpad mode and size.
   This also works while zoomed, detached,
   or temporarily tiled with SUPER+T. Pending cycle presses are discarded so
   they cannot bring the window straight back out. **SUPER+S** summons it;
@@ -158,8 +158,14 @@ Wired in `~/.config/hypr/local.lua`:
   which becomes its home. Press again to restore its saved floating position
   and size. Leaving that workspace also returns it to its floating placement.
   With **Stay pinned** on, it remains floating when you return; with Stay off,
-  it re-tiles into its home workspace. Scratchpad pins keep the same dock/park
-  toggle. Ordinary windows keep the usual float/tile toggle.
+  it re-tiles into its home workspace. Ordinary windows keep the usual float/tile toggle.
+- **SUPER+T inside scratchpad** -- toggle a Hyprpin window between tiled and
+  floating while keeping it in scratchpad, unpinned. The first float starts
+  near the upper middle, half the display wide and a quarter tall. Move or
+  resize it freely; its mode, position, and size are remembered separately
+  from the normal pinned float, including across reboots. **SUPER+S** hides or
+  shows the whole scratchpad. **SUPER+P** brings the focused Hyprpin window out
+  at tiled right. Scratchpad windows stay parked even with **Stay pinned** off.
 
 **SUPER+T while zoomed** changes the underlying placement directly and clears
 the temporary zoom. The enlarged zoom rectangle never replaces your saved
@@ -180,6 +186,9 @@ Remembered geometry lives in
 delete the file (or one entry) to forget. Existing size-only entries still work.
 Edge thickness and floating geometry are stored separately per rule. A pop-out
 docked into a workspace is not recorded, since the layout sizes it.
+Scratchpad mode and floating geometry use a separate `scratchpad` entry in the
+same sizes file. Hiding, tiling, cycling out, and closing capture the last move;
+summoning on another display restores a monitor-relative position that fits.
 
 The plugin leaves keyboard configuration to your Hyprland config. To add the
 SUPER+P and SUPER+ALT+S bindings, put this in `~/.config/hypr/local.lua` (or your bindings file):

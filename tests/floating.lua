@@ -81,8 +81,8 @@ local function reset(placement, stay)
   dofile(engine)
   __hyprpin.rules = { { class = "^Test$", title = "", monitor = "", placement = placement or "tile-right", stay = stay ~= false } }
 end
-local function emit(event, window)
-  for _, sub in ipairs(handlers[event] or {}) do if not sub.removed then sub.callback(window) end end
+local function emit(event, ...)
+  for _, sub in ipairs(handlers[event] or {}) do if not sub.removed then sub.callback(...) end end
 end
 local function tick(timeout)
   local pending = timers
@@ -274,9 +274,8 @@ if mode == "cycle" then
     workspace(2)
     check("parked window stays hidden across workspaces", w.workspace.special and not w.pinned)
     monitors[1].active_special_workspace = w.workspace
-    w.floating = true
     assert(__hyprpin.send_to_scratchpad(w.address))
-    check("sending an already parked window re-tiles and hides it", not w.floating and not monitors[1].active_special_workspace and #events == 1)
+    check("sending an already parked tile hides it", not w.floating and not monitors[1].active_special_workspace and #events == 1)
     monitors[1].active_special_workspace = w.workspace
     assert(__hyprpin.cycle(w.address))
     check("summoned window re-enters cycle at tiled right", __hyprpin.cycle_pending.next == "tile-right")
@@ -337,6 +336,28 @@ elseif mode == "reopen" then
   toggle(w)
   check("smaller display clamps width and uses its new origin",
     w.size.x == 800 and w.at.x == -800 and w.at.y >= -70 and w.at.y + w.size.y <= 500)
+  return
+elseif mode == "scratchpad-write" then
+  reset("special")
+  local w = pop()
+  toggle(w)
+  position(w, 510, 70, 900, 240)
+  emit("window.close", w)
+  check("close saves the scratchpad rectangle before the sampler", __hyprpin.sizes[key].scratchpad.w == 900)
+  return
+elseif mode == "scratchpad-reopen" or mode == "scratchpad-retile" or mode == "scratchpad-retile-reopen" then
+  reset("special")
+  local w = pop()
+  if mode == "scratchpad-retile-reopen" then
+    check("fresh engine restores tiled scratchpad mode", not w.floating and w.workspace.special)
+    toggle(w)
+  end
+  check("fresh engine restores independent scratchpad floating rectangle",
+    w.workspace.special and w.floating and not w.pinned and same(w, { x = 510, y = 70, w = 900, h = 240 }))
+  if mode == "scratchpad-retile" then
+    toggle(w)
+    check("scratchpad tiling preference is persisted", not __hyprpin.sizes[key].scratchpad.floating)
+  end
   return
 elseif mode == "bounded" then
   reset()
@@ -454,9 +475,34 @@ reset("special")
 w, sv = pop()
 check("scratchpad remains unpinned and parked", w.workspace.special and not w.pinned)
 toggle(w)
-check("scratchpad can still dock into a workspace", sv.tiled and not w.workspace.special)
+check("scratchpad T floats in place without pinning", w.workspace.special and w.floating and not w.pinned and not sv.dock)
+check("first scratchpad float starts upper middle", w.size.x == 960 and w.size.y == 262 and w.at.x == 480 and w.at.y < 100)
+local scratch = custom(w)
 toggle(w)
-check("scratchpad toggle returns to scratchpad", w.workspace.special and not sv.tiled)
+check("scratchpad T re-tiles in place and saves the mode", w.workspace.special and not w.floating and not __hyprpin.sizes[key].scratchpad.floating)
+toggle(w)
+check("scratchpad T restores the immediately resized float", w.workspace.special and same(w, scratch) and __hyprpin.sizes[key].scratchpad.floating)
+workspace(2)
+workspace(1)
+check("scratchpad floats stay parked across normal workspace changes", w.workspace.special and not w.pinned and same(w, scratch))
+position(w, 350, 65, 700, 230)
+emit("workspace.special_active", nil, monitors[1])
+check("hiding scratchpad captures a drag before the sampler", __hyprpin.sizes[key].scratchpad.w == 700)
+assert(__hyprpin.send_to_scratchpad(w.address))
+check("re-sending preserves the scratchpad float mode and rectangle", w.workspace.special and w.floating and w.at.x == 350 and w.size.x == 700)
+__hyprpin.saved[w.address] = nil
+toggle(w)
+check("scratchpad T adopts its rule after a compositor reload", w.workspace.special and not w.floating and __hyprpin.saved[w.address].special)
+toggle(w)
+w.monitor, w.workspace = monitors[2], { id = -1, name = "special:scratchpad", special = true }
+emit("workspace.special_active", w.workspace, monitors[2])
+check("summoning on another display restores relative float geometry", w.floating and w.at.x < 0 and w.at.x >= -2560 and w.at.y >= -160)
+reset("special", false)
+w, sv = pop()
+toggle(w)
+workspace(2)
+workspace(1)
+check("Stay pinned off cannot pull a scratchpad float onto the home workspace", w.workspace.special and w.floating)
 
 reset("bottom-right")
 w = pop()

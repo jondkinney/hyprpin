@@ -8,9 +8,20 @@ import { generate, parseSizes } from "./engine.mjs";
 
 const legacy = { class: "^Test$", title: "", w: 600, h: 1000 };
 const floating = { placement: "free", x: 0.5, y: 0.1, w: 960, h: 270 };
+const scratchpad = { floating: true, x: 0.5, y: 0.05, w: 960, h: 240 };
 const encoded = (entry) => JSON.stringify({ version: 1, entries: [entry] });
 assert.deepEqual(parseSizes(encoded(legacy)), [legacy]);
 assert.deepEqual(parseSizes(encoded({ ...legacy, floating })), [{ ...legacy, floating }]);
+for (const mode of [true, false]) {
+  const entry = { ...legacy, floating, scratchpad: { ...scratchpad, floating: mode } };
+  assert.deepEqual(parseSizes(encoded(entry)), [entry]);
+}
+for (const bad of [null, [], "bad", 9, {},
+  ...["x", "y", "w", "h"].flatMap(key => [null, "2", -1, 20000].map(value => ({ ...scratchpad, [key]: value }))),
+  ...[null, "true", 1, {}, 'true; error("injected")'].map(floating => ({ ...scratchpad, floating })),
+  { ...scratchpad, x: 1.01 }, { ...scratchpad, w: 99 }, { ...scratchpad, h: 59 },
+]) assert.deepEqual(parseSizes(encoded({ ...legacy, scratchpad: bad })), [legacy]);
+assert.deepEqual(parseSizes(encoded({ ...legacy, scratchpad }).replace('"x":0.5', '"x":1e999')), [legacy]);
 for (const raw of [null, 2, [], {}, "", "{", "null", "false", "42", '"string"', "[]", "{}", '{"entries":{}}', " ".repeat(32769)]) {
   assert.deepEqual(parseSizes(raw), []);
 }
@@ -48,9 +59,16 @@ try {
   assert(saved[0]?.floating, "engine-written geometry survives the actual QML parser");
   writeFileSync(engine, generate({ sizesPath: state, sizes: saved }));
   run("reopen");
+  for (const mode of ["scratchpad-write", "scratchpad-reopen", "scratchpad-retile", "scratchpad-retile-reopen"]) {
+    run(mode);
+    const remembered = parseSizes(readFileSync(state, "utf8"));
+    assert(remembered[0]?.scratchpad, "scratchpad mode and geometry survive the QML parser");
+    assert(remembered[0]?.floating, "scratchpad geometry must preserve the normal float");
+    writeFileSync(engine, generate({ sizesPath: state, sizes: remembered }));
+  }
   // Escaped, maximum-length identities still produce a file the bounded reader accepts.
   const hostile = Array.from({ length: 64 }, (_, i) => ({
-    class: `${i}`.padEnd(256, '"'), title: "\\".repeat(256), w: 600, h: 1000, floating,
+    class: `${i}`.padEnd(256, '"'), title: "\\".repeat(256), w: 600, h: 1000, floating, scratchpad,
   }));
   writeFileSync(engine, generate({ sizesPath: state, sizes: hostile }));
   run("bounded");
