@@ -67,6 +67,7 @@ local function reset(placement, stay)
       elseif op == "float" then w.floating = options.action == "on"
       elseif op == "resize" then w.size = { x = options.x, y = options.y }
       elseif op == "move" then
+        if w.pinned and options.workspace and options.workspace:find("special:", 1, true) == 1 then return end
         if options.monitor then w.monitor = assert(get_monitor(options.monitor)) end
         if options.workspace then
           w.workspace = { id = tonumber(options.workspace) or -1, name = options.workspace,
@@ -252,6 +253,72 @@ if mode == "cycle" then
     __hyprpin.sizes[key].floating.w == 422 and __hyprpin.sizes[key].floating.h == 237)
   assert(__hyprpin.cycle(w.address))
   check("next press during resize continues from requested corner", __hyprpin.cycle_pending.next == "bottom-right")
+
+  for _, start in ipairs(starts) do
+    reset(start)
+    w, sv = pop()
+    local home, before = sv.workspace_id, rect(w)
+    assert(__hyprpin.send_to_scratchpad(w.address))
+    check("explicit send waits for durable save from " .. start, same(w, before) and w.pinned)
+    local pending = assert(__hyprpin.cycle_pending)
+    check("explicit send requests scratchpad", pending.next == "special" and pending.remaining == nil)
+    assert(__hyprpin.cycle(w.address))
+    assert(__hyprpin.send_to_scratchpad(w.address))
+    dofile(arg[3] .. "/park-1.lua")
+    check("explicit send unpins and releases the edge immediately", not w.pinned and not sv.edge_monitor)
+    check("explicit send parks the original window and saves its rule",
+      w.workspace.special and sv.special and sv.rule_placement == "special" and sv.workspace_id == home)
+    check("presses during the send cannot bring it back out", not __hyprpin.cycle_pending and #events == 1)
+    for _, rule in ipairs(rules) do check("no old edge reservation survives parking", not rule.enabled) end
+    workspace(2)
+    check("parked window stays hidden across workspaces", w.workspace.special and not w.pinned)
+    monitors[1].active_special_workspace = w.workspace
+    assert(__hyprpin.send_to_scratchpad(w.address))
+    check("sending an already parked window just hides it", not monitors[1].active_special_workspace and #events == 1)
+    monitors[1].active_special_workspace = w.workspace
+    assert(__hyprpin.cycle(w.address))
+    check("summoned window re-enters cycle at tiled right", __hyprpin.cycle_pending.next == "tile-right")
+    __hyprpin.rules[1].placement = "tile-right"
+    __hyprpin.cycle_complete(2, true)
+    check("summoned window returns with a fresh lap", w.pinned and sv.edge == "right" and sv.cycle_remaining == 3 and not w.workspace.special)
+  end
+  for _, change in ipairs({ "zoom", "detach", "dock" }) do
+    reset(change == "dock" and "bottom-right" or "tile-right")
+    w, sv = pop()
+    if change == "zoom" then zoom(w) else toggle(w) end
+    monitors[1].active_special_workspace = { name = "special:scratchpad" }
+    assert(__hyprpin.send_to_scratchpad(w.address))
+    dofile(arg[3] .. "/park-1.lua")
+    check("send handles " .. change, w.workspace.special and not w.pinned and not sv.big_prev and not sv.dock and not sv.detached)
+    check("send hides an already open scratchpad overlay", not monitors[1].active_special_workspace)
+  end
+  reset("tile-right")
+  w, sv = pop()
+  for _ = 1, 9 do assert(__hyprpin.cycle(w.address)) end
+  assert(__hyprpin.send_to_scratchpad(w.address))
+  assert(__hyprpin.cycle(w.address))
+  dofile(arg[3] .. "/1-1.lua")
+  check("explicit send replaces remaining queued moves", #events == 2 and __hyprpin.cycle_pending.next == "special")
+  dofile(arg[3] .. "/park-2.lua")
+  dofile(arg[3] .. "/park-2.lua")
+  check("queued send and replay finish hidden without an extra move", w.workspace.special and not __hyprpin.cycle_pending and #events == 2)
+  reset("tile-right")
+  w, sv = pop()
+  assert(__hyprpin.send_to_scratchpad(w.address))
+  __hyprpin.cycle_complete(1, false)
+  check("failed scratchpad save preserves the pin and reservation", w.pinned and sv.edge_monitor and sv.rule_placement == "tile-right")
+  assert(__hyprpin.send_to_scratchpad(w.address))
+  tick(15000)
+  check("scratchpad timeout leaves the window available for retry", w.pinned and not __hyprpin.cycle_pending)
+  reset("bottom-right")
+  w = new_window()
+  check("ordinary scratchpad send falls back to stock", not __hyprpin.send_to_scratchpad(w.address))
+  w.pinned, w.floating = true, true
+  assert(__hyprpin.send_to_scratchpad(w.address))
+  dofile(arg[3] .. "/park-1.lua")
+  check("scratchpad send adopts a matching pin after reload", w.workspace.special and __hyprpin.saved[w.address].special)
+  __hyprpin.enabled = false
+  check("disabled plugin preserves stock scratchpad behavior", not __hyprpin.send_to_scratchpad(w.address))
   print("all " .. checks .. " cycle checks passed")
   return
 elseif mode == "reopen" then

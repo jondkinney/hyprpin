@@ -24,7 +24,7 @@ assert.deepEqual(JSON.parse(receive(JSON.stringify(event)).payload), {
 });
 for (const raw of [null, [], 9, "{", "null", "[]", '"text"', " ".repeat(1025),
   ...[{ session: "old" }, { revision: 0 }, { index: -1 }, { index: 0.1 }, { index: 64 },
-    { token: 0 }, { token: 1000000001 }, { token: "1" }, { previous: "top-left" }, { next: "fill" }, { next: "special" },
+    { token: 0 }, { token: 1000000001 }, { token: "1" }, { previous: "top-left" }, { next: "fill" },
     { next: 'tile-right";os.execute("bad")' }].map(part => JSON.stringify({ ...event, ...part })),
 ]) assert.equal(receive(raw).running, false, `must refuse ${raw}`);
 assert.equal(receive(JSON.stringify(event), { cycleReply: { token: 1, success: true } }).running, false);
@@ -35,6 +35,7 @@ for (const outdated of [{ session: "old" }, { revision: 0 }]) {
   assert.equal(result.cycleResync, 1, "outdated requests must refresh instead of silently stalling");
 }
 console.log("ok: compositor event schema, snapshot identity, and stdin serialization checks");
+assert.equal(JSON.parse(receive(JSON.stringify({ ...event, next: "special" })).payload).next, "special");
 
 const laps = [
   ["tile-right", "tile-bottom", "tile-left", "tile-top"],
@@ -63,6 +64,13 @@ try {
     rules: [{ class: "^Test$", title: "", monitor: "", placement: "tile-right", stay: true }],
     cycleReply: { token: 1, success: true },
   }));
+  for (const token of [1, 2]) {
+    writeFileSync(join(directory, `park-${token}.lua`), generate({
+      sizesPath: join(directory, "sizes.json"), rulesRevision: token,
+      rules: [{ class: "^Test$", title: "", monitor: "", placement: "special", stay: true }],
+      cycleReply: { token, success: true },
+    }));
+  }
   for (const [name, placement] of [["unsaved", "tile-right"], ["saved", "tile-bottom"]]) {
     writeFileSync(join(directory, `resync-${name}.lua`), generate({
       sizesPath: join(directory, "sizes.json"), rulesRevision: name === "unsaved" ? 1 : 2,

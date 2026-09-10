@@ -809,7 +809,7 @@ Panel {
                                 PanelToolTip {
                                     visible: parent.hoverNow && !parent.popupOpen
                                     delay: 350
-                                    text: "SUPER+P: visits the other three positions clockwise, then switches between tiled and floating. Each step saves this rule.\nSUPER+T: switches an edge pin to its remembered float and back.\nScratchpad: SUPER+S brings it up."
+                                    text: "SUPER+P: visits the other three positions clockwise, then switches between tiled and floating. Each step saves this rule.\nSUPER+T: switches an edge pin to its remembered float and back.\nSUPER+ALT+S: sends it to the scratchpad and saves this rule. SUPER+S brings it up."
                                     fontFamily: root.fontFamily
                                 }
                             }

@@ -91,8 +91,8 @@ on the next change or restart.
   showing the window anywhere, the engine parks it in Hyprland's
   `special:scratchpad` workspace, the one Omarchy's SUPER+S and SUPER+grave
   toggle, so it is a keypress away on whichever display you are looking at.
-  `monitor` is ignored for it. Pull it out of the scratchpad by hand
-  (SUPER+ALT+S) and the engine lets go of it, as with a manual unpin.
+  `monitor` is ignored for it. Move it onto an ordinary workspace by hand
+  and the engine lets go of it, as with a manual unpin.
 - `stay` -- `true` (the default for new rules) keeps it popped even when you
   return to its home workspace; it only comes back when you unpin it yourself.
   Set `false` to have it snap back to where it was when you return.
@@ -137,6 +137,14 @@ Wired in `~/.config/hypr/local.lua`:
   only the four tiled edges and four floating corners. A window already in
   scratchpad can enter the cycle at tiled right. Ordinary windows retain
   SUPER+P's stock pseudo-window behavior.
+- **SUPER+ALT+S** -- send the focused Hyprpin window to the scratchpad and
+  save **Scratchpad** as its placement. A tiled edge releases its reserved
+  space as soon as the save completes. This also works while zoomed, detached,
+  or temporarily tiled with SUPER+T. Pending cycle presses are discarded so
+  they cannot bring the window straight back out. **SUPER+S** summons it;
+  focus it and press **SUPER+P** to return at tiled right. Sending an already
+  summoned scratchpad window hides it again. Ordinary windows keep Omarchy's
+  usual send-to-scratchpad behavior.
 - **SUPER+T on an edge pin** -- float it out of its reserved edge, releasing
   that space to the other tiles immediately. It stays pinned across workspaces,
   including its home workspace with **Stay pinned** off. Move and resize it
@@ -172,7 +180,7 @@ Edge thickness and floating geometry are stored separately per rule. A pop-out
 docked into a workspace is not recorded, since the layout sizes it.
 
 The plugin leaves keyboard configuration to your Hyprland config. To add the
-SUPER+P binding, put this in `~/.config/hypr/local.lua` (or your bindings file):
+SUPER+P and SUPER+ALT+S bindings, put this in `~/.config/hypr/local.lua` (or your bindings file):
 
 ```lua
 hl.unbind("SUPER + P")
@@ -182,6 +190,15 @@ o.bind("SUPER + P", "Cycle Hyprpin placement / pseudo window", function()
   local hyprpin = _G.__hyprpin
   if hyprpin and hyprpin.cycle and hyprpin.cycle(window.address) then return end
   hl.dispatch(hl.dsp.window.pseudo())
+end)
+
+hl.unbind("SUPER + ALT + S")
+o.bind("SUPER + ALT + S", "Move window to scratchpad", function()
+  local window = hl.get_active_window()
+  if not window then return end
+  local hyprpin = _G.__hyprpin
+  if hyprpin and hyprpin.send_to_scratchpad and hyprpin.send_to_scratchpad(window.address) then return end
+  hl.dispatch(hl.dsp.window.move({ workspace = "special:scratchpad", follow = false }))
 end)
 ```
 
@@ -204,7 +221,7 @@ floating/docking/zoom transitions, and saved geometry. The floating tests also
 exercise malformed state, byte limits, and persistence through the real QML
 parser into a fresh engine. Node.js and the Lua CLI are development dependencies.
 Cycle tests cover every starting slot, full rule reapplication between presses,
-queued presses, failed saves, zoom, scratchpad, and adoption after a compositor
+queued presses, explicit scratchpad sends, failed saves, zoom, scratchpad, and adoption after a compositor
 reload. Save-confirmation tests cover pre-save reads, interleaved applies, read
 failures, lost IPC replies, replayed confirmations, stale-request recovery, and
 focus changes while saving. Placement-writer tests exercise stale requests, concurrent edits,
@@ -225,7 +242,7 @@ The plugin's external boundaries, and the contract at each:
   QML re-checks length and validates every field, count, and range after
   parsing. `tests/test-statefile.py` exercises the boundaries: exact limit
   and one over, symlinks, FIFOs, planted destination links, oversized input.
-- **Placement cycling** sends an event under Hyprland's 1 KiB event cap with
+- **Placement changes** (cycling and explicit scratchpad sends) send an event under Hyprland's 1 KiB event cap with
   a rule index, service-session identity, rules revision, and placement enum.
   The service validates it against its current snapshot, then passes a delta
   of at most 4 KiB on stdin to `statefile.py placement`. Under a validated
