@@ -1,23 +1,14 @@
 // Exercise the generated compositor engine, including its real QML serializer.
 // Run from anywhere: node tests/test-window-close.mjs
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { runInNewContext } from "node:vm";
+import { generate } from "./engine.mjs";
 
-const source = readFileSync(new URL("../Service.qml", import.meta.url), "utf8");
-const start = source.indexOf("    function luaString(");
-const end = source.indexOf("    // ------------------------------------------------------------------ apply", start);
-assert(start >= 0 && end > start, "QML engine generator must be present");
-const engine = runInNewContext(`${source.slice(start, end)}\nlua()`, {
-  rules: [], sizes: [], enabled: true,
-  cornerWidthPercent: 22, cornerMinWidth: 420, margin: 20,
-  fallbackPlacement: "bottom-right", edgeSizePercent: 34,
-  sizesPath: "/unused/hyprpin-close-test.json",
-}, { timeout: 1000 });
+const engine = generate();
 
 const directory = mkdtempSync(join(tmpdir(), "hyprpin-close-test-"));
 try {

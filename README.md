@@ -10,9 +10,9 @@ will only do this for inside a tab.
 Click the bar icon, pick a window from **Open windows**, then choose a display
 and a placement for it. From then on, whenever the workspace behind that window
 stops being the one on screen, the window floats to where you said and pins
-itself to every workspace. Switch back to its home workspace and it goes back
-exactly as it was -- same workspace, same size, same position, same tiled or
-floating state.
+itself to every workspace. **Stay pinned** keeps it visible when you return;
+turn that off to have it return to its original workspace, position, size,
+and tiled or floating state.
 
 [View the settings panel](docs/settings-panel.jpg).
 
@@ -106,7 +106,8 @@ on the next change or restart.
   floating window, and a workspace gap rule scoped to that one display -- the
   same way the Omaperch plugin does, so the window never actually joins the
   layout and the bar is never squeezed. One tiled edge per display: a second
-  window headed for an already-docked display takes its fallback corner. An
+  window headed for an already-docked display floats without a reservation;
+  SUPER+T can attach it once the edge is free. An
   older file's `tile: true` flag is read as `tile-right`.
   Closing a pinned edge window immediately releases its reserved stripe and
   lets the other windows fill the space, without switching workspaces.
@@ -122,22 +123,39 @@ Wired in `~/.config/hypr/local.lua`:
   again puts it back. Does nothing on a window that is not a pop-out, or on
   one parked in the scratchpad. A tiled edge keeps its reservation while
   zoomed.
-- **SUPER+T** -- on a pop-out, dock it into the current workspace (it tiles in,
-  and that workspace becomes its home); leaving sends it back out to wherever
-  its rule puts it -- corner, tiled edge, or scratchpad -- returning re-tiles
-  it. A tiled edge gives its reserved stripe back while docked this way. Press again to undock back to a floating pop.
-  On any ordinary window, SUPER+T is the usual float/tile toggle, untouched. With
-  **Stay pinned** on, a dock is only temporary: the window floats out when you
-  leave and stays a floating pop when you return (press SUPER+T again to
-  re-dock), so Stay's always-floating meaning is preserved. With Stay off, the
-  dock is permanent -- the workspace becomes home and it re-tiles on return.
+- **SUPER+T on an edge pin** -- float it out of its reserved edge, releasing
+  that space to the other tiles immediately. It stays pinned across workspaces,
+  including its home workspace with **Stay pinned** off. Move and resize it
+  anywhere you like; press again to return to the same edge and thickness.
+  The next press restores your floating position and size. The first float is
+  centered at the configured corner size. If another pin has claimed the edge,
+  it stays floating until you retry after the edge becomes free.
+- **SUPER+T on a floating/corner pin** -- tile it into the current workspace,
+  which becomes its home. Press again to restore its saved floating position
+  and size. Leaving that workspace also returns it to its floating placement.
+  With **Stay pinned** on, it remains floating when you return; with Stay off,
+  it re-tiles into its home workspace. Scratchpad pins keep the same dock/park
+  toggle. Ordinary windows keep the usual float/tile toggle.
 
-Resize a floating pop-out by hand and the new size sticks: future pops of that
-rule reuse it, anchored in the same corner. Sizes live in
+**SUPER+T while zoomed** changes the underlying placement directly and clears
+the temporary zoom. The enlarged zoom rectangle never replaces your saved
+floating position or edge thickness.
+
+Move or resize a floating pop-out by hand and that placement sticks for future
+pops of the same rule, including after the window closes or the engine restarts.
+Positions are relative to the display; restored rectangles are clamped to fit
+when the display is smaller. The rule still chooses the destination display.
+Changing a corner placement in the panel starts at that new corner.
+
+For example, float your call with SUPER+T, move it near the camera, and resize
+it. SUPER+T now switches between that spot and its reserved edge, wherever you
+are working. SUPER+Z remains available for a separate temporary zoom.
+
+Remembered geometry lives in
 `~/.local/state/omarchy/hyprpin-sizes.json`, written by the engine itself --
-delete the file (or one entry) to forget. A tiled edge remembers its
-thickness the same way. A pop-out docked into a workspace with SUPER+T is not
-recorded, since the layout resizes it whenever its neighbours change.
+delete the file (or one entry) to forget. Existing size-only entries still work.
+Edge thickness and floating geometry are stored separately per rule. A pop-out
+docked into a workspace is not recorded, since the layout sizes it.
 
 ## Development checks
 
@@ -146,11 +164,14 @@ omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell Service.qml HyprpinPanel.qml
 python3 tests/test-statefile.py
 node tests/test-window-close.mjs
+node tests/test-floating.mjs
 ```
 
-The close-handling regression test uses Node.js to generate the actual Lua
-engine from `Service.qml`, then Lua to exercise window-close events and
-subscription lifetimes. Node.js and the Lua CLI are development dependencies.
+The regression tests use Node.js to generate the actual Lua engine from
+`Service.qml`, then Lua to exercise window-close events, subscription lifetimes,
+floating/docking/zoom transitions, and saved geometry. The floating tests also
+exercise malformed state, byte limits, and persistence through the real QML
+parser into a fresh engine. Node.js and the Lua CLI are development dependencies.
 
 ## Security boundaries
 
@@ -171,7 +192,7 @@ The plugin's external boundaries, and the contract at each:
   Everything injected into it passes through an escaping serializer with
   per-string caps. The engine reads no files: remembered sizes are injected
   by the service as validated data. It writes `hyprpin-sizes.json` (bounded
-  to 64 entries) by staging-plus-rename; Lua's `io` cannot open exclusively,
+  to 64 entries and 32 KiB, including escaped strings) by staging-plus-rename; Lua's `io` cannot open exclusively,
   so staging creation is the one step that is clear-then-create rather than
   `O_EXCL`, a same-user race documented here rather than hidden.
 - **Child processes** (`/usr/bin/hyprctl`, `/usr/bin/python3 -I`) run with

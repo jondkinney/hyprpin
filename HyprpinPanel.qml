@@ -809,7 +809,7 @@ Panel {
                                 PanelToolTip {
                                     visible: parent.hoverNow && !parent.popupOpen
                                     delay: 350
-                                    text: "Tiled: reserves that edge of the display for the window, and everything else tiles beside it on every workspace. Resize it and the tiles follow.\nScratchpad: hides it in the scratchpad instead; SUPER+S brings it up."
+                                    text: "Tiled: reserves that edge on every workspace. SUPER+T switches between the edge and a remembered floating position; move or resize the float to set it.\nScratchpad: hides it in the scratchpad instead; SUPER+S brings it up."
                                     fontFamily: root.fontFamily
                                 }
                             }
