@@ -120,21 +120,20 @@ local key = "^Test$\31"
 if mode == "cycle" then
   local starts = { "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left" }
   local expected = {
-    { "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
-    { "tile-left", "tile-top", "tile-right", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
-    { "tile-top", "tile-right", "tile-bottom", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
-    { "tile-right", "tile-bottom", "tile-left", "top-right", "bottom-right", "bottom-left", "top-left", "special", "tile-right" },
-    { "bottom-right", "bottom-left", "top-left", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
-    { "bottom-left", "top-left", "top-right", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
-    { "top-left", "top-right", "bottom-right", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
-    { "top-right", "bottom-right", "bottom-left", "special", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right" },
+    { "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left", "tile-right", "tile-bottom" },
+    { "tile-left", "tile-top", "tile-right", "top-right", "bottom-right", "bottom-left", "top-left", "tile-right", "tile-bottom" },
+    { "tile-top", "tile-right", "tile-bottom", "top-right", "bottom-right", "bottom-left", "top-left", "tile-right", "tile-bottom" },
+    { "tile-right", "tile-bottom", "tile-left", "top-right", "bottom-right", "bottom-left", "top-left", "tile-right", "tile-bottom" },
+    { "bottom-right", "bottom-left", "top-left", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right" },
+    { "bottom-left", "top-left", "top-right", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right" },
+    { "top-left", "top-right", "bottom-right", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right" },
+    { "top-right", "bottom-right", "bottom-left", "tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right" },
   }
   for case, start in ipairs(starts) do
     reset(start)
     local w, sv = pop()
     local original_home = sv.workspace_id
     for step, next_slot in ipairs(expected[case]) do
-      if w.workspace.special then monitors[1].active_special_workspace = w.workspace end
       local before = rect(w)
       assert(__hyprpin.cycle(w.address))
       check(start .. " step " .. step .. " waits for durable save", same(w, before) and #events == step)
@@ -144,11 +143,9 @@ if mode == "cycle" then
       dofile(arg[3] .. "/" .. case .. "-" .. step .. ".lua")
       check("rule reapply commits to same tracked window and original home",
         __hyprpin.saved[w.address] == sv and sv.workspace_id == original_home and sv.rule_placement == next_slot)
-      if next_slot == "special" then
-        check("scratchpad is unpinned and releases its stripe", w.workspace.special and not w.pinned and not sv.edge_monitor)
-      elseif next_slot:find("tile-", 1, true) == 1 then
+      check("cycling keeps the window visible and out of scratchpad", w.pinned and not w.workspace.special)
+      if next_slot:find("tile-", 1, true) == 1 then
         check("edge cycle remains pinned with a reservation", w.pinned and sv.edge_monitor == "DP-1")
-        check("leaving scratchpad closes its overlay", not monitors[1].active_special_workspace)
       else
         check("floating lap uses a corner-sized rectangle", w.pinned and w.size.y < 600 and not sv.edge_monitor)
         local right, bottom = next_slot:find("right"), next_slot:find("bottom")
@@ -157,8 +154,15 @@ if mode == "cycle" then
       end
     end
   end
-  reset("tile-right")
+  reset("special")
   local w, sv = pop()
+  monitors[1].active_special_workspace = w.workspace
+  assert(__hyprpin.cycle(w.address))
+  dofile(arg[3] .. "/from-scratchpad.lua")
+  check("an existing scratchpad rule can enter the cycle", sv.rule_placement == "tile-right" and w.pinned and not w.workspace.special)
+  check("leaving an existing scratchpad closes its overlay", not monitors[1].active_special_workspace)
+  reset("tile-right")
+  w, sv = pop()
   zoom(w)
   assert(__hyprpin.cycle(w.address))
   dofile(arg[3] .. "/1-1.lua")
@@ -180,7 +184,7 @@ if mode == "cycle" then
   for _ = 1, 9 do assert(__hyprpin.cycle(w.address)) end
   check("rapid presses queue behind one save", #events == 1 and __hyprpin.cycle_pending.queued == 8)
   for step = 1, 9 do dofile(arg[3] .. "/1-" .. step .. ".lua") end
-  check("all rapid presses complete in order", #events == 9 and sv.rule_placement == "tile-right" and not __hyprpin.cycle_pending)
+  check("all rapid presses complete in order", #events == 9 and sv.rule_placement == "tile-bottom" and not __hyprpin.cycle_pending)
   reset("tile-right")
   w, sv = pop()
   assert(__hyprpin.cycle(w.address))

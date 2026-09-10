@@ -126,17 +126,17 @@ Wired in `~/.config/hypr/local.lua`:
 - **SUPER+P** -- cycle the focused Hyprpin window's saved placement. Starting
   at its current edge or corner, visit the other three positions clockwise
   before changing type. A tiled lap leads to floating top-right; a floating
-  lap leads to scratchpad; scratchpad leads to tiled right. For example,
+  lap leads directly to tiled right. For example,
   starting tiled bottom: **tiled left → top → right → floating top-right →
-  bottom-right → bottom-left → top-left → scratchpad**. Bring the scratchpad
-  back with SUPER+S and press SUPER+P to start the tiled lap again.
+  bottom-right → bottom-left → top-left → tiled right**.
   Each step updates the rule shown in settings and survives shell restarts,
   compositor reloads, and reboots. A new window starts a fresh lap at its saved
   placement. SUPER+T also starts a fresh lap from the resulting type/position.
   SUPER+P while zoomed changes the underlying placement and clears the zoom.
-  The **Fill it** placement stays available in settings; the cycle uses the
-  four tiled edges, four floating corners, and scratchpad. Ordinary windows
-  retain SUPER+P's stock pseudo-window behavior.
+  **Fill it** and **Scratchpad** stay available in settings; the cycle uses
+  only the four tiled edges and four floating corners. A window already in
+  scratchpad can enter the cycle at tiled right. Ordinary windows retain
+  SUPER+P's stock pseudo-window behavior.
 - **SUPER+T on an edge pin** -- float it out of its reserved edge, releasing
   that space to the other tiles immediately. It stays pinned across workspaces,
   including its home workspace with **Stay pinned** off. Move and resize it

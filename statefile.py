@@ -175,7 +175,7 @@ def cmd_placement(path, limit):
         value = request.get(key)
         if not isinstance(value, str) or len(value) > 256 or (key == "class" and not value):
             die(EXIT_REFUSED, "invalid rule identity")
-    if request.get("previous") not in PLACEMENTS or request.get("next") not in PLACEMENTS - {"fill"}:
+    if request.get("previous") not in PLACEMENTS or request.get("next") not in PLACEMENTS - {"fill", "special"}:
         die(EXIT_REFUSED, "invalid placement")
     directory, base = os.path.split(path)
     dfd = open_state_dir(directory)

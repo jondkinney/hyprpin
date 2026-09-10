@@ -46,10 +46,12 @@ with tempfile.TemporaryDirectory() as tmp:
         before = path.read_bytes()
         check('wrong document shape refused: ' + str(type(raw).__name__), run().returncode != 0 and path.read_bytes() == before)
     for value in [None, [], 1, 'bad', {}, {**request, 'class': 'x' * 257}, {**request, 'next': []},
-                  {**request, 'next': 'fill'}, {**request, 'previous': 'bad'}, {**request, 'title': False}, b'{', b'x' * 4097]:
+                  {**request, 'next': 'fill'}, {**request, 'next': 'special'}, {**request, 'previous': 'bad'}, {**request, 'title': False}, b'{', b'x' * 4097]:
         restore()
         before = path.read_bytes()
         check('malformed request leaves state intact', run(value).returncode != 0 and path.read_bytes() == before)
+    restore({**base, 'rules': [{**rule, 'placement': 'special'}]})
+    check('existing scratchpad rule can enter the cycle', run({**request, 'previous': 'special', 'next': 'tile-right'}).returncode == 0)
     restore()
     data = path.read_bytes()
     path.write_bytes(data + b' ' * (262144 - len(data)))

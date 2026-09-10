@@ -23,7 +23,7 @@ assert.deepEqual(JSON.parse(receive(JSON.stringify(event)).payload), {
 });
 for (const raw of [null, [], 9, "{", "null", "[]", '"text"', " ".repeat(1025),
   ...[{ session: "old" }, { revision: 0 }, { index: -1 }, { index: 0.1 }, { index: 64 },
-    { token: 0 }, { token: 1000000001 }, { token: "1" }, { previous: "top-left" }, { next: "fill" },
+    { token: 0 }, { token: 1000000001 }, { token: "1" }, { previous: "top-left" }, { next: "fill" }, { next: "special" },
     { next: 'tile-right";os.execute("bad")' }].map(part => JSON.stringify({ ...event, ...part })),
 ]) assert.equal(receive(raw).running, false, `must refuse ${raw}`);
 assert.equal(receive(JSON.stringify(event), { cycleReply: { token: 1, success: true } }).running, false);
@@ -42,7 +42,7 @@ try {
     const lap = laps[group];
     const at = lap.indexOf(start);
     const remaining = Array.from({ length: 3 }, (_, i) => lap[(at + i + 1) % 4]);
-    const rest = group === 0 ? [...laps[1], "special", "tile-right"] : ["special", ...laps[0], "top-right"];
+    const rest = group === 0 ? [...laps[1], "tile-right", "tile-bottom"] : [...laps[0], "top-right", "bottom-right"];
     [...remaining, ...rest].forEach((placement, i) => {
       writeFileSync(join(directory, `${caseIndex + 1}-${i + 1}.lua`), generate({
         sizesPath: join(directory, "sizes.json"), rulesRevision: i + 1,
@@ -51,6 +51,11 @@ try {
       }));
     });
   }
+  writeFileSync(join(directory, "from-scratchpad.lua"), generate({
+    sizesPath: join(directory, "sizes.json"), rulesRevision: 1,
+    rules: [{ class: "^Test$", title: "", monitor: "", placement: "tile-right", stay: true }],
+    cycleReply: { token: 1, success: true },
+  }));
   const result = spawnSync("lua", [fileURLToPath(new URL("floating.lua", import.meta.url)), initial, "cycle", directory], {
     encoding: "utf8", timeout: 10000,
   });

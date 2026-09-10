@@ -249,7 +249,7 @@ Item {
         if (!request || request.session !== cycleSession || request.revision !== rulesRevision
                 || !Number.isInteger(request.token) || request.token < 1 || request.token > 1000000000
                 || !Number.isInteger(request.index) || request.index < 0 || request.index >= rules.length
-                || ["tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left", "special"].indexOf(request.next) < 0)
+                || ["tile-right", "tile-bottom", "tile-left", "tile-top", "top-right", "bottom-right", "bottom-left", "top-left"].indexOf(request.next) < 0)
             return
         var rule = rules[request.index]
         if (rule.placement !== request.previous)
@@ -1108,7 +1108,7 @@ sizesLua(),
 'local function cycle_target(current, remaining)',
 '  if current == "special" then return "tile-right", 3 end',
 '  local edge = edge_side(current) ~= nil',
-'  if remaining == 0 then return edge and "top-right" or "special", 3 end',
+'  if remaining == 0 then return edge and "top-right" or "tile-right", 3 end',
 '  local lap = edge and edge_lap or float_lap',
 '  for i, slot in ipairs(lap) do',
 '    if slot == current then return lap[i % 4 + 1], remaining - 1 end',
